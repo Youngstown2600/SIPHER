@@ -753,6 +753,12 @@ void SipEngine::startCallPcap(int id,const std::string& path,const std::string& 
 void SipEngine::stopCapture(CaptureKind kind){if(captures_)captures_->stop(kind);}
 void SipEngine::stopCaptures(){if(captures_)captures_->stopAll();}
 std::string SipEngine::captureStatus()const{return captures_?captures_->status():"Packet capture unavailable";}
+void SipEngine::openPcapInWireshark(int id,const std::string& path)const
+{
+    const auto state=callSnapshot(id);
+    CaptureManager::openInWireshark(path,state);
+    logger_.info("Opened PCAP in Wireshark with automatic RTP/RTCP Decode As: "+path);
+}
 
 void SipEngine::onSipMessage(SipTraceEntry entry)
 {

@@ -49,6 +49,7 @@ public:
     void stopCapture(CaptureKind kind);
     void stopCaptures();
     std::string captureStatus()const;
+    void openPcapInWireshark(int id,const std::string& path)const;
 
     std::string normalizeDestination(const std::string& value)const;
     std::string callerIdentityUri(const std::string& value)const;

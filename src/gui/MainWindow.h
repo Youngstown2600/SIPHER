@@ -11,7 +11,7 @@ public:
 private slots:
     void refresh();void refreshDiagnostics();void showRawSip();
     void dial();void answerSelected();void hangupSelected();void foregroundSelected();void holdSelected();void resumeSelected();void toggleMuteSelected();void showDtmfPad();
-    void startSipTrace();void stopSipTrace();void startSipPcap();void startRtpPcap();void startCallPcap();void stopPcaps();
+    void startSipTrace();void stopSipTrace();void startSipPcap();void startRtpPcap();void startCallPcap();void stopPcaps();void openLastPcap();
     void launchBatch();void loadDestinations();void loadCallerIds();void loadQueueAudio();void hangupAll();void editProfile();void showAudioDevices();void showRegistrationHistory();void applyTheme(const QString& theme);
     void showSipLadder();void exportCallReport();
     void runAuditFingerprint();void runAuditVulns();void runAuditProbe();void runAuditDiscover();void runAuditMethods();void runAuditAuth();void runAuditExtensions();void runAuditCompliance();void runAuditParser();void runAuditResilience();void runAuditScenario();void runAuditTls();void runAuditFull();void saveAuditReport();
@@ -25,5 +25,5 @@ private:
     QSpinBox* batchCount_{nullptr};QSpinBox* launchInterval_{nullptr};QLineEdit* batchDestination_{nullptr};QLineEdit* fixedCallerId_{nullptr};
     QLabel* destinationFileLabel_{nullptr};QLabel* callerIdFileLabel_{nullptr};QLabel* queueAudioFileLabel_{nullptr};QComboBox* theme_{nullptr};QTimer* refreshTimer_{nullptr};QTabWidget* tabs_{nullptr};QLabel* profileSummary_{nullptr};QPlainTextEdit* activityLog_{nullptr};
     QLineEdit* auditHost_{nullptr};QLineEdit* auditUser_{nullptr};QSpinBox* auditPort_{nullptr};QSpinBox* auditExtFirst_{nullptr};QSpinBox* auditExtLast_{nullptr};QComboBox* auditTransport_{nullptr};QPlainTextEdit* auditOutput_{nullptr};
-    QString destinationFile_,callerIdFile_,queueAudioFile_;std::string lastAuditReport_;std::string profilePath_;int pendingSelectId_{-1};int displayedTraceCallId_{-1};std::size_t displayedTraceCount_{0};
+    QString destinationFile_,callerIdFile_,queueAudioFile_,lastPcapPath_;std::string lastAuditReport_;std::string profilePath_;int pendingSelectId_{-1};int displayedTraceCallId_{-1};int lastPcapCallId_{-1};std::size_t displayedTraceCount_{0};
 };

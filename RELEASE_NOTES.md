@@ -1,3 +1,11 @@
+# S.I.P.H.E.R. 1.0.0 r7 — Automatic RTP/RTCP Wireshark Decode
+
+- Adds **OPEN LAST PCAP (AUTO RTP)** to the Qt GUI. After an RTP-only or combined call capture is stopped, S.I.P.H.E.R. launches Wireshark with the selected call's negotiated/observed RTP and RTCP UDP ports supplied as command-line Decode As rules.
+- Adds CLI command `pcap-open <id> <file>` for the same behavior.
+- RTP ports are forced to Wireshark's `rtp` dissector and RTCP ports to `rtcp`; RTP/RTCP-mux overlaps prefer RTP. If no negotiated media ports are available, S.I.P.H.E.R. falls back to Wireshark's `rtp_udp` heuristic.
+- The capture file itself remains a normal PCAP/PCAPNG. No proprietary conversion is performed, so the file remains portable and can still be opened normally in Wireshark/tshark.
+- Windows 10/11 uses the same auto-decode workflow. The portable build locates `Wireshark.exe` from PATH or a normal Wireshark installation.
+
 # S.I.P.H.E.R. 1.0.0 r6 — Rebrand
 
 S.I.P.H.E.R. — **SIP Inspection, Protocol Handling, Enumeration & Recon** — By GITSC. This release renames S.a.K. while preserving the same SIP/RTP/PBX feature set, 26 themes, CLI/GUI workflows, and legacy TrunkMonkey configuration compatibility. Executables are now `sipher` and `sipher-gui`. The r6 branding refresh adds the supplied block-terminal S.I.P.H.E.R. logo to the CLI, an adaptive 80x25-style layout, a matching GUI banner/application icon, and a compact top-left CLI brand badge.

@@ -192,6 +192,8 @@ S.I.P.H.E.R. provides two different kinds of SIP troubleshooting output:
 
 RTP/RTCP capture uses the negotiated/observed media ports for the selected normal Phone call. Start the RTP capture after media has been negotiated (normally after ringing/answer depending on SDP behavior).
 
+**r7 Auto RTP Decode:** after stopping an RTP-only or combined call PCAP, click **OPEN LAST PCAP (AUTO RTP)** in the GUI. S.I.P.H.E.R. launches Wireshark with the selected call's RTP/RTCP UDP ports already mapped to the RTP/RTCP dissectors, so **Telephony → RTP → RTP Streams** can be used without manually choosing **Decode As**. CLI users can run `pcap-open <id> <file>`. The `.pcap`/`.pcapng` remains a standard capture file; the decode mapping is passed only when Wireshark is launched.
+
 Packet-capture privileges are configured by the **builder**, not by the running softphone. On Linux the builder installs a capture helper when needed and grants it `CAP_NET_RAW` + `CAP_NET_ADMIN`. On FreeBSD it creates a persistent per-user `devfs` rule for `/dev/bpf*`. The builder requests `sudo`, `doas`, or root only for those setup operations; the GUI and CLI continue to run as the normal user. Re-run `./build.sh --configure-capture` at any time to repair capture permissions without rebuilding S.I.P.H.E.R..
 
 The default capture interface is `any` where supported. On FreeBSD, select the actual interface name (for example `wlan0`, `em0`, or `igb0`) when the installed capture tool does not provide an `any` pseudo-interface.

@@ -27,6 +27,13 @@ public:
     static std::string captureTool();
     static std::vector<std::string> availableInterfaces();
     static std::string permissionHint();
+
+    // Launch Wireshark with this call's dynamic media ports pre-decoded.
+    // The capture remains a normal PCAP/PCAPNG; Decode As is supplied on
+    // Wireshark's command line so the operator does not have to set it by hand.
+    static std::string wiresharkTool();
+    static std::vector<std::string> wiresharkDecodeArguments(const std::string& path,const CallSnapshot& call);
+    static void openInWireshark(const std::string& path,const CallSnapshot& call);
 private:
     struct Proc {
 #ifdef _WIN32

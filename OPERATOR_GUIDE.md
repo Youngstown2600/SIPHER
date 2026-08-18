@@ -30,7 +30,7 @@ Type `menu` at any time to reopen the guided menu. Advanced users can type the o
 4. Use **4 — Call diagnostics & packet capture** to review RTP quality or create a combined PCAP.
 5. Choose **Export diagnostic report** when escalation needs a text summary.
 
-For an RTP-only capture, Wireshark may need the `rtp_udp` heuristic enabled before **Telephony → RTP → RTP Streams** populates. A combined call PCAP includes signaling context and is generally easier to analyze.
+For an RTP-only capture, use **OPEN LAST PCAP (AUTO RTP)** in the GUI or `pcap-open <id> <file>` in the CLI after stopping the capture. S.I.P.H.E.R. supplies Wireshark with the call's RTP/RTCP Decode As mappings automatically. A combined call PCAP remains preferable when signaling context is useful.
 
 ## When capture fails
 

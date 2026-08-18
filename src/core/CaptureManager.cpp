@@ -40,6 +40,7 @@ bool fileExists(const std::string&p){std::error_code ec;return std::filesystem::
 std::string locateExe(const char*name){char buf[MAX_PATH];DWORD n=SearchPathA(nullptr,name,nullptr,MAX_PATH,buf,nullptr);if(n>0&&n<MAX_PATH)return std::string(buf,n);const char*windir=std::getenv("WINDIR");if(windir){auto p=std::string(windir)+"\\System32\\"+name;if(fileExists(p))return p;}for(const char*base:{"C:\\Program Files\\Wireshark\\","C:\\Program Files (x86)\\Wireshark\\"}){auto p=std::string(base)+name;if(fileExists(p))return p;}return{};}
 int runHidden(const std::string&command){std::vector<char> cmd(command.begin(),command.end());cmd.push_back('\0');STARTUPINFOA si{};si.cb=sizeof(si);PROCESS_INFORMATION pi{};if(!CreateProcessA(nullptr,cmd.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&si,&pi))return -1;WaitForSingleObject(pi.hProcess,INFINITE);DWORD code=1;GetExitCodeProcess(pi.hProcess,&code);CloseHandle(pi.hThread);CloseHandle(pi.hProcess);return static_cast<int>(code);}
 bool startHiddenProcess(const std::string&command,HANDLE&handle,DWORD&pid){std::vector<char> cmd(command.begin(),command.end());cmd.push_back('\0');STARTUPINFOA si{};si.cb=sizeof(si);PROCESS_INFORMATION pi{};if(!CreateProcessA(nullptr,cmd.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&si,&pi))return false;CloseHandle(pi.hThread);handle=pi.hProcess;pid=pi.dwProcessId;return true;}
+bool startDesktopProcess(const std::string&command){std::vector<char> cmd(command.begin(),command.end());cmd.push_back('\0');STARTUPINFOA si{};si.cb=sizeof(si);PROCESS_INFORMATION pi{};if(!CreateProcessA(nullptr,cmd.data(),nullptr,nullptr,FALSE,CREATE_NEW_PROCESS_GROUP,nullptr,nullptr,&si,&pi))return false;CloseHandle(pi.hThread);CloseHandle(pi.hProcess);return true;}
 #else
 bool executable(const std::string& path){return ::access(path.c_str(), X_OK) == 0;}
 std::string locate(const char* name){const char* path=std::getenv("PATH");if(path){std::istringstream in(path);std::string dir;while(std::getline(in,dir,':')){if(dir.empty())dir=".";const auto full=dir+"/"+name;if(executable(full))return full;}}for(const char* dir:{"/usr/bin","/usr/sbin","/usr/local/bin","/usr/local/sbin"}){const auto full=std::string(dir)+"/"+name;if(executable(full))return full;}return{};}
@@ -58,6 +59,39 @@ std::string CaptureManager::findTool(){
 #endif
 }
 std::string CaptureManager::captureTool(){return findTool();}
+std::string CaptureManager::wiresharkTool(){
+#ifdef _WIN32
+    return locateExe("Wireshark.exe");
+#else
+    return locate("wireshark");
+#endif
+}
+std::vector<std::string> CaptureManager::wiresharkDecodeArguments(const std::string&path,const CallSnapshot&c){
+    if(path.empty())throw std::runtime_error("PCAP path is empty");
+    std::set<int>rtp,rtcp;
+    for(auto*a:{&c.localRtpAddress,&c.remoteRtpAddress,&c.sourceRtpAddress}){const int p=portFromAddress(*a);if(p)rtp.insert(p);}
+    for(auto*a:{&c.localRtcpAddress,&c.remoteRtcpAddress,&c.sourceRtcpAddress}){const int p=portFromAddress(*a);if(p)rtcp.insert(p);}
+    for(int p:rtp)rtcp.erase(p); // RTP/RTCP mux: prefer RTP when both share one port.
+    std::vector<std::string>args{"-r",path};
+    for(int p:rtp){args.push_back("-d");args.push_back("udp.port=="+std::to_string(p)+",rtp");}
+    for(int p:rtcp){args.push_back("-d");args.push_back("udp.port=="+std::to_string(p)+",rtcp");}
+    if(rtp.empty()&&rtcp.empty()){args.push_back("--enable-heuristic");args.push_back("rtp_udp");}
+    return args;
+}
+void CaptureManager::openInWireshark(const std::string&path,const CallSnapshot&c){
+    std::error_code ec;if(!std::filesystem::exists(std::filesystem::u8path(path),ec))throw std::runtime_error("PCAP file was not found: "+path);
+    const auto tool=wiresharkTool();if(tool.empty())throw std::runtime_error("Wireshark was not found. Install Wireshark or add it to PATH, then try again.");
+    const auto args=wiresharkDecodeArguments(path,c);
+#ifdef _WIN32
+    std::ostringstream command;command<<quoteWin(tool);for(const auto&a:args)command<<" "<<quoteWin(a);if(!startDesktopProcess(command.str()))throw std::runtime_error("Unable to launch Wireshark.exe");
+#else
+    std::vector<char*>argv;argv.reserve(args.size()+2);argv.push_back(const_cast<char*>(tool.c_str()));for(const auto&a:args)argv.push_back(const_cast<char*>(a.c_str()));argv.push_back(nullptr);
+    posix_spawn_file_actions_t actions;if(posix_spawn_file_actions_init(&actions)!=0)throw std::runtime_error("Unable to initialize Wireshark process actions");
+    (void)posix_spawn_file_actions_addopen(&actions,STDOUT_FILENO,"/dev/null",O_WRONLY,0600);(void)posix_spawn_file_actions_addopen(&actions,STDERR_FILENO,"/dev/null",O_WRONLY,0600);
+    pid_t pid=-1;const int rc=::posix_spawn(&pid,tool.c_str(),&actions,nullptr,argv.data(),environ);posix_spawn_file_actions_destroy(&actions);if(rc!=0)throw std::runtime_error("Unable to launch Wireshark: "+std::string(std::strerror(rc)));
+    std::thread([pid](){int st=0;while(::waitpid(pid,&st,0)<0&&errno==EINTR){}}).detach();
+#endif
+}
 std::vector<std::string> CaptureManager::availableInterfaces(){
 #ifdef _WIN32
     return {};

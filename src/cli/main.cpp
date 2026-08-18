@@ -273,6 +273,7 @@ Advanced Commands:
  rtpcap-start <id> <file> [interface]
  callcap-start <id> <file> [interface]   combined SIP+RTP/RTCP for an active call
  capture-stop [sip|rtp|call|all] | capture-status | capture-ifaces
+ pcap-open <id> <file>            open in Wireshark with RTP/RTCP auto-decoded
  pjsiplog | log-up [n] | log-down [n] | log-tail   (PgUp/PgDn also scroll Engine Log)
  themes | theme <name>
  blast <count> <interval-ms> <dest> [cid]
@@ -927,10 +928,12 @@ int main(int argc,char** argv)
                 else throw std::runtime_error("capture-stop expects sip, rtp, call, or all");
                 addNotice("Packet capture stopped: "+which+".");
             }else if(cmd=="capture-ifaces"){
-                std::ostringstream list;list<<"Capture tool: "<<CaptureManager::captureTool()<<"\nInterfaces:";
+                std::ostringstream list;list<<"Capture tool: "<<CaptureManager::captureTool()<<"\nWireshark: "<<CaptureManager::wiresharkTool()<<"\nInterfaces:";
                 for(const auto& name:CaptureManager::availableInterfaces())list<<" "<<name;
                 list<<"\n"<<CaptureManager::permissionHint()<<"\n";
                 dashboard.showOverlay("CAPTURE INTERFACES",list.str(),std::cout);dashboard.pauseForEnter(std::cin,std::cout);
+            }else if(cmd=="pcap-open"){
+                const int id=requireCallId(in);std::string path=readArg(in);if(path.empty())throw std::runtime_error("pcap file path required");focusCallId=id;engine.openPcapInWireshark(id,path);addNotice("Opened PCAP in Wireshark with automatic RTP/RTCP decoding: "+path,DashboardNotice::Level::Success);
             }else if(cmd=="capture-status"){
                 if(dashboard.enabled()) addNotice(engine.captureStatus());
                 else std::cout<<engine.captureStatus()<<'\n';
