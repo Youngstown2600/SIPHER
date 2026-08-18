@@ -37,10 +37,17 @@ int portFromAddress(const std::string&a){if(a.empty())return 0;auto p=a.rfind(':
 std::vector<int> portsFromFilter(const std::string&filter){std::vector<int> out;std::regex r(R"(port\s+([0-9]{1,5}))",std::regex::icase);for(std::sregex_iterator i(filter.begin(),filter.end(),r),e;i!=e;++i){try{int p=std::stoi((*i)[1].str());if(p>0&&p<=65535&&std::find(out.begin(),out.end(),p)==out.end())out.push_back(p);}catch(...){}}return out;}
 std::string quoteWin(const std::string&s){std::string o="\"";for(char c:s){if(c=='\"')o+="\\\"";else o+=c;}o+='\"';return o;}
 bool fileExists(const std::string&p){std::error_code ec;return std::filesystem::exists(std::filesystem::u8path(p),ec);}
-std::string locateExe(const char*name){char buf[MAX_PATH];DWORD n=SearchPathA(nullptr,name,nullptr,MAX_PATH,buf,nullptr);if(n>0&&n<MAX_PATH)return std::string(buf,n);const char*windir=std::getenv("WINDIR");if(windir){auto p=std::string(windir)+"\\System32\\"+name;if(fileExists(p))return p;}for(const char*base:{"C:\\Program Files\\Wireshark\\","C:\\Program Files (x86)\\Wireshark\\"}){auto p=std::string(base)+name;if(fileExists(p))return p;}return{};}
+std::string locateExe(const char*name){const char*portableRoot=std::getenv("SIPHER_PORTABLE_ROOT");if(!portableRoot)portableRoot=std::getenv("SAK_PORTABLE_ROOT");if(portableRoot){auto p=(std::filesystem::path(portableRoot)/"tools"/name).string();if(fileExists(p))return p;}char buf[MAX_PATH];DWORD n=SearchPathA(nullptr,name,nullptr,MAX_PATH,buf,nullptr);if(n>0&&n<MAX_PATH)return std::string(buf,n);const char*windir=std::getenv("WINDIR");if(windir){auto p=std::string(windir)+"\\System32\\"+name;if(fileExists(p))return p;}for(const char*base:{"C:\\Program Files\\Wireshark\\","C:\\Program Files (x86)\\Wireshark\\"}){auto p=std::string(base)+name;if(fileExists(p))return p;}return{};}
 int runHidden(const std::string&command){std::vector<char> cmd(command.begin(),command.end());cmd.push_back('\0');STARTUPINFOA si{};si.cb=sizeof(si);PROCESS_INFORMATION pi{};if(!CreateProcessA(nullptr,cmd.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&si,&pi))return -1;WaitForSingleObject(pi.hProcess,INFINITE);DWORD code=1;GetExitCodeProcess(pi.hProcess,&code);CloseHandle(pi.hThread);CloseHandle(pi.hProcess);return static_cast<int>(code);}
 bool startHiddenProcess(const std::string&command,HANDLE&handle,DWORD&pid){std::vector<char> cmd(command.begin(),command.end());cmd.push_back('\0');STARTUPINFOA si{};si.cb=sizeof(si);PROCESS_INFORMATION pi{};if(!CreateProcessA(nullptr,cmd.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&si,&pi))return false;CloseHandle(pi.hThread);handle=pi.hProcess;pid=pi.dwProcessId;return true;}
 bool startDesktopProcess(const std::string&command){std::vector<char> cmd(command.begin(),command.end());cmd.push_back('\0');STARTUPINFOA si{};si.cb=sizeof(si);PROCESS_INFORMATION pi{};if(!CreateProcessA(nullptr,cmd.data(),nullptr,nullptr,FALSE,CREATE_NEW_PROCESS_GROUP,nullptr,nullptr,&si,&pi))return false;CloseHandle(pi.hThread);CloseHandle(pi.hProcess);return true;}
+std::string captureHidden(const std::string&command){
+    SECURITY_ATTRIBUTES sa{sizeof(sa),nullptr,TRUE};HANDLE r=nullptr,w=nullptr;if(!CreatePipe(&r,&w,&sa,0))return{};SetHandleInformation(r,HANDLE_FLAG_INHERIT,0);
+    STARTUPINFOA si{};si.cb=sizeof(si);si.dwFlags=STARTF_USESTDHANDLES|STARTF_USESHOWWINDOW;si.wShowWindow=SW_HIDE;si.hStdInput=GetStdHandle(STD_INPUT_HANDLE);si.hStdOutput=w;si.hStdError=w;
+    PROCESS_INFORMATION pi{};std::vector<char> cmd(command.begin(),command.end());cmd.push_back('\0');if(!CreateProcessA(nullptr,cmd.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW,nullptr,nullptr,&si,&pi)){CloseHandle(r);CloseHandle(w);return{};}CloseHandle(w);
+    std::string out;char buf[2048];for(;;){DWORD got=0;if(!ReadFile(r,buf,sizeof(buf),&got,nullptr)||!got)break;out.append(buf,got);}WaitForSingleObject(pi.hProcess,5000);CloseHandle(r);CloseHandle(pi.hThread);CloseHandle(pi.hProcess);return out;
+}
+
 #else
 bool executable(const std::string& path){return ::access(path.c_str(), X_OK) == 0;}
 std::string locate(const char* name){const char* path=std::getenv("PATH");if(path){std::istringstream in(path);std::string dir;while(std::getline(in,dir,':')){if(dir.empty())dir=".";const auto full=dir+"/"+name;if(executable(full))return full;}}for(const char* dir:{"/usr/bin","/usr/sbin","/usr/local/bin","/usr/local/sbin"}){const auto full=std::string(dir)+"/"+name;if(executable(full))return full;}return{};}
@@ -94,7 +101,11 @@ void CaptureManager::openInWireshark(const std::string&path,const CallSnapshot&c
 }
 std::vector<std::string> CaptureManager::availableInterfaces(){
 #ifdef _WIN32
-    return {};
+    const auto dumpcap=locateExe("dumpcap.exe");
+    if(dumpcap.empty())return {"any"};
+    const auto output=captureHidden(quoteWin(dumpcap)+" -D");std::vector<std::string> ids;std::istringstream in(output);std::string line;
+    while(std::getline(in,line)){const auto dot=line.find('.');if(dot==std::string::npos)continue;const auto id=line.substr(0,dot);if(!id.empty()&&std::all_of(id.begin(),id.end(),[](unsigned char c){return std::isdigit(c)!=0;}))ids.push_back(id);}
+    if(ids.empty())ids.push_back("any");return ids;
 #else
     std::set<std::string> names;
 #if defined(__linux__)
@@ -107,7 +118,7 @@ std::vector<std::string> CaptureManager::availableInterfaces(){
 }
 std::string CaptureManager::permissionHint(){
 #ifdef _WIN32
-    return "Packet capture may require Administrator privileges.";
+    return "Windows 10/11 can use built-in pktmon (Administrator may be required). Windows 7 uses dumpcap and requires a compatible packet-capture driver such as Npcap/WinPcap installed on the host.";
 #elif defined(__FreeBSD__)
     return "FreeBSD capture requires user access to /dev/bpf*. Re-run ./build.sh --configure-capture to install the persistent S.I.P.H.E.R. devfs rule for your user.";
 #else
@@ -118,7 +129,7 @@ void CaptureManager::start(Proc&p,const std::string&path,const std::string&filte
     if(p.running)throw std::runtime_error("Capture is already running");
     auto tool=findTool();
 #ifdef _WIN32
-    if(tool.empty())throw std::runtime_error("No packet capture tool found. Windows 10/11 normally provides pktmon.exe; dumpcap.exe is also supported.");
+    if(tool.empty())throw std::runtime_error("No packet capture tool found. Windows 10/11 normally provides pktmon.exe. Windows 7 requires dumpcap.exe plus an installed packet-capture driver.");
     auto lower=tool;std::transform(lower.begin(),lower.end(),lower.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
     if(lower.find("pktmon.exe")!=std::string::npos){if(sip_.running||rtp_.running||call_.running)throw std::runtime_error("Windows pktmon fallback supports one diagnostic PCAP at a time. Stop the current PCAP first.");auto ports=portsFromFilter(filter);if(ports.empty())throw std::runtime_error("Could not derive packet ports for pktmon capture.");runHidden(quoteWin(tool)+" stop");runHidden(quoteWin(tool)+" filter remove");for(std::size_t i=0;i<ports.size();++i){std::ostringstream c;c<<quoteWin(tool)<<" filter add TM"<<i<<" -p "<<ports[i];if(runHidden(c.str())!=0)throw std::runtime_error("pktmon filter setup failed. Run S.I.P.H.E.R. as Administrator for Windows PCAP capture.");}p.etlPath=path+".etl";std::error_code ec;std::filesystem::remove(std::filesystem::u8path(p.etlPath),ec);std::filesystem::remove(std::filesystem::u8path(path),ec);std::ostringstream c;c<<quoteWin(tool)<<" start --capture --comp nics --pkt-size 0 --file-name "<<quoteWin(p.etlPath);if(runHidden(c.str())!=0){runHidden(quoteWin(tool)+" filter remove");throw std::runtime_error("pktmon capture could not start. Run S.I.P.H.E.R. as Administrator.");}p.path=path;p.tool=tool;p.filter=filter;p.pktmon=true;p.running=true;logger_.info("Windows pktmon capture started file="+path+" filter="+filter);return;}
     std::string ifn=iface.empty()?"any":iface;if(ifn=="any")throw std::runtime_error("dumpcap on Windows requires a capture interface. Enter an interface name/index, or use the built-in pktmon fallback.");std::ostringstream c;c<<quoteWin(tool)<<" -q -i "<<quoteWin(ifn)<<" -f "<<quoteWin(filter)<<" -w "<<quoteWin(path);if(!startHiddenProcess(c.str(),p.process,p.pid))throw std::runtime_error("CreateProcess failed while starting dumpcap");p.path=path;p.tool=tool;p.filter=filter;p.running=true;std::this_thread::sleep_for(std::chrono::milliseconds(250));DWORD code=STILL_ACTIVE;if(!GetExitCodeProcess(p.process,&code)||code!=STILL_ACTIVE){CloseHandle(p.process);p=Proc{};throw std::runtime_error("dumpcap exited immediately. Check interface and capture permissions.");}logger_.info("Packet capture started pid="+std::to_string(p.pid)+" file="+path+" filter="+filter);

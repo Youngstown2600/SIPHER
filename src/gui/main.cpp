@@ -30,6 +30,7 @@ static QIcon makeSipherIcon(){
     p.end();return QIcon(pix);
 }
 int main(int argc,char**argv){
+    runtime::configurePortableEnvironment();
     QApplication app(argc,argv);app.setApplicationName("S.I.P.H.E.R. By GITSC");app.setApplicationVersion(TRUNKMONKEY_VERSION);
     app.setWindowIcon(makeSipherIcon());
     try{runtime::ensureUserDirectories();}catch(const std::exception&error){QMessageBox::critical(nullptr,"S.I.P.H.E.R.",QString::fromStdString(error.what()));return 2;}

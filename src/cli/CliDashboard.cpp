@@ -7,7 +7,15 @@
 #include <iostream>
 #include <sstream>
 #include <string_view>
-#ifndef _WIN32
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif
+#else
 #include <sys/ioctl.h>
 #include <unistd.h>
 #endif
@@ -72,7 +80,22 @@ CliDashboard::CliDashboard()
 #ifndef _WIN32
     enabled_=::isatty(STDOUT_FILENO) && ::isatty(STDIN_FILENO);
 #else
-    enabled_=true;
+    const HANDLE input=GetStdHandle(STD_INPUT_HANDLE);
+    const HANDLE output=GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD inputMode=0,outputMode=0;
+    enabled_=input!=INVALID_HANDLE_VALUE && output!=INVALID_HANDLE_VALUE && GetConsoleMode(input,&inputMode) && GetConsoleMode(output,&outputMode);
+    if(enabled_){
+        consoleTty_=true;
+        // Windows 10/11 supports VT processing. Native Windows 7 does not;
+        // the dashboard remains functional there but falls back to monochrome.
+        if(SetConsoleMode(output,outputMode|ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
+            vtEnabled_=true;
+            color_=true;
+        }
+    }
+#endif
+#ifndef _WIN32
+    vtEnabled_=enabled_;
 #endif
     const char* term=std::getenv("TERM");
     if(term && std::string_view(term)=="dumb") enabled_=false;
@@ -90,7 +113,11 @@ CliDashboard::CliDashboard()
     } else if(const char* legacyDisable=std::getenv("TRUNKMONKEY_NO_DASHBOARD")) {
         if(std::string_view(legacyDisable)=="1") enabled_=false;
     }
+#ifdef _WIN32
+    color_=color_ && enabled_ && std::getenv("NO_COLOR")==nullptr;
+#else
     color_=enabled_ && std::getenv("NO_COLOR")==nullptr;
+#endif
     if(term){
         const std::string_view t(term);
         consoleTty_=(t=="linux" || t=="cons25" || t=="vt100" || t=="vt220");
@@ -172,6 +199,14 @@ CliDashboard::TerminalSize CliDashboard::terminalSize() const
     winsize ws{};
     if(::ioctl(STDOUT_FILENO,TIOCGWINSZ,&ws)==0 && ws.ws_col>0 && ws.ws_row>0){
         size.columns=ws.ws_col;size.rows=ws.ws_row;measured=true;
+    }
+#else
+    CONSOLE_SCREEN_BUFFER_INFO info{};
+    const HANDLE output=GetStdHandle(STD_OUTPUT_HANDLE);
+    if(output!=INVALID_HANDLE_VALUE && GetConsoleScreenBufferInfo(output,&info)){
+        size.columns=static_cast<int>(info.srWindow.Right-info.srWindow.Left+1);
+        size.rows=static_cast<int>(info.srWindow.Bottom-info.srWindow.Top+1);
+        measured=size.columns>0&&size.rows>0;
     }
 #endif
     // COLUMNS/LINES are only fallbacks. Exported shell values can become stale
@@ -635,7 +670,16 @@ std::vector<std::string> CliDashboard::mergeColumns(const std::vector<std::strin
 
 void CliDashboard::clear(std::ostream& out) const
 {
-    if(enabled_) out<<"\033[2J\033[H";
+    if(!enabled_) return;
+#ifdef _WIN32
+    const HANDLE output=GetStdHandle(STD_OUTPUT_HANDLE);CONSOLE_SCREEN_BUFFER_INFO info{};
+    if(output!=INVALID_HANDLE_VALUE && GetConsoleScreenBufferInfo(output,&info)){
+        const DWORD cells=static_cast<DWORD>(info.dwSize.X)*static_cast<DWORD>(info.dwSize.Y);DWORD written=0;const COORD home{0,0};
+        FillConsoleOutputCharacterA(output,' ',cells,home,&written);FillConsoleOutputAttribute(output,info.wAttributes,cells,home,&written);SetConsoleCursorPosition(output,home);
+    }
+#else
+    out<<"\033[2J\033[H";
+#endif
 }
 
 void CliDashboard::render(const DashboardState& state,std::ostream& out) const
@@ -649,7 +693,7 @@ void CliDashboard::render(const DashboardState& state,std::ostream& out) const
     const int rightWidth=wide?std::min(52,std::max(40,size.columns/3)):size.columns;
     const int leftWidth=wide?size.columns-rightWidth-gap:size.columns;
     clear(out);
-    out<<"\033]0;S.I.P.H.E.R. "<<TRUNKMONKEY_VERSION<<" — "<<pageName(state.page)<<"\007";
+    if(vtEnabled_) out<<"\033]0;S.I.P.H.E.R. "<<TRUNKMONKEY_VERSION<<" — "<<pageName(state.page)<<"\007";
 
     for(const auto& line:panelLines("",pageBarLines(state.page,size.columns),size.columns)) out<<line<<'\n';
 

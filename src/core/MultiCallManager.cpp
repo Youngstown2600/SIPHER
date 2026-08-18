@@ -9,7 +9,9 @@
 #include <functional>
 #include <sstream>
 #include <cstring>
-#ifndef _WIN32
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <unistd.h>
 #endif
 #include <stdexcept>
@@ -18,13 +20,31 @@ namespace trunkmonkey {
 namespace {
 std::string shellQuote(const std::string& value)
 {
+#ifdef _WIN32
+    std::string out="\"";
+    for(char c:value){if(c=='\"')out+="\\\"";else out.push_back(c);}out+="\"";return out;
+#else
     std::string out="'";
     for(char c:value){if(c=='\'')out+="'\\''";else out.push_back(c);}out+="'";return out;
+#endif
 }
 
 std::string findExecutable(const std::string& name)
 {
-    if(const char* path=std::getenv("PATH")){std::stringstream ss(path);std::string dir;while(std::getline(ss,dir,':')){if(dir.empty())dir=".";const auto p=std::filesystem::path(dir)/name;std::error_code ec;auto perms=std::filesystem::status(p,ec).permissions();if(!ec&&std::filesystem::is_regular_file(p)&&perms!=std::filesystem::perms::unknown)return p.string();}}
+    if(const char* path=std::getenv("PATH")){
+#ifdef _WIN32
+        constexpr char separator=';';
+        const std::string executable=(std::filesystem::path(name).extension().empty()?name+".exe":name);
+#else
+        constexpr char separator=':';
+        const std::string executable=name;
+#endif
+        std::stringstream ss(path);std::string dir;
+        while(std::getline(ss,dir,separator)){if(dir.empty())dir=".";const auto p=std::filesystem::path(dir)/executable;std::error_code ec;if(std::filesystem::is_regular_file(p,ec)&&!ec)return p.string();}
+    }
+#ifdef _WIN32
+    const char* portableRoot=std::getenv("SIPHER_PORTABLE_ROOT");if(!portableRoot)portableRoot=std::getenv("SAK_PORTABLE_ROOT");if(portableRoot){const auto p=std::filesystem::path(portableRoot)/"tools"/(name+".exe");std::error_code ec;if(std::filesystem::is_regular_file(p,ec)&&!ec)return p.string();}
+#endif
     return {};
 }
 
@@ -37,7 +57,7 @@ std::string prepareQueueAudio(const std::string& input)
 #ifndef _WIN32
     const auto pid=static_cast<unsigned long>(::getpid());
 #else
-    const auto pid=0ul;
+    const auto pid=static_cast<unsigned long>(::GetCurrentProcessId());
 #endif
     const auto hash=std::hash<std::string>{}(input);
     const auto output=runtime::tempDir()/("queue-audio-"+std::to_string(pid)+"-"+std::to_string(hash)+".wav");

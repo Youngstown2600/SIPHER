@@ -192,6 +192,8 @@ S.I.P.H.E.R. provides two different kinds of SIP troubleshooting output:
 
 RTP/RTCP capture uses the negotiated/observed media ports for the selected normal Phone call. Start the RTP capture after media has been negotiated (normally after ringing/answer depending on SDP behavior).
 
+**r8 Automated Audit:** use `audit` for the guided CLI workflow or `audit-auto <host> [user|-] [port] [udp|tcp] [ext-first ext-last]` for the new chained PBX/SIP audit. The GUI PBX Audit tab now leads with **RUN AUTOMATED CHAINED AUDIT** and reports phase progress plus HIGH/WARN/PASS/INFO posture counts. Extension differential testing is opt-in; bounded parser/rate checks, TLS posture, and public vulnerability metadata can be toggled.
+
 **r7 Auto RTP Decode:** after stopping an RTP-only or combined call PCAP, click **OPEN LAST PCAP (AUTO RTP)** in the GUI. S.I.P.H.E.R. launches Wireshark with the selected call's RTP/RTCP UDP ports already mapped to the RTP/RTCP dissectors, so **Telephony → RTP → RTP Streams** can be used without manually choosing **Decode As**. CLI users can run `pcap-open <id> <file>`. The `.pcap`/`.pcapng` remains a standard capture file; the decode mapping is passed only when Wireshark is launched.
 
 Packet-capture privileges are configured by the **builder**, not by the running softphone. On Linux the builder installs a capture helper when needed and grants it `CAP_NET_RAW` + `CAP_NET_ADMIN`. On FreeBSD it creates a persistent per-user `devfs` rule for `/dev/bpf*`. The builder requests `sudo`, `doas`, or root only for those setup operations; the GUI and CLI continue to run as the normal user. Re-run `./build.sh --configure-capture` at any time to repair capture permissions without rebuilding S.I.P.H.E.R..
@@ -572,3 +574,7 @@ FreeBSD ports/packages are normally installed under `LOCALBASE` (default `/usr/l
 - PJSIP is built with `make lib` rather than the default all-target, avoiding failures in sample/test executables S.I.P.H.E.R. does not ship or use.
 - The FreeBSD bootstrap explicitly requires PortAudio, Opus, bcg729, and libuuid, while disabling WebRTC AEC, UPnP, AMR, SILK, and video helpers. Bundled G.711/G.722/GSM/Speex/iLBC remain available.
 - The PJSIP compatibility stamp is v9 so older local builds are rebuilt once with the r11 ABI/I/O-queue recipe.
+
+### Windows 11 CI build
+
+The source tree includes `.github/workflows/windows11-portable.yml`. When the project is hosted on GitHub, **Actions → Windows 11 Portable Build → Run workflow** builds and regression-tests the Windows 10/11 x64 portable folder on a native Windows runner and publishes it as a downloadable workflow artifact containing `sipher.exe` and `sipher-gui.exe` plus their runtime dependencies.

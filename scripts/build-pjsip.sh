@@ -38,6 +38,12 @@ case "$HOST_OS" in
       exit 1
     }
     ;;
+  MINGW*|MSYS*)
+    HOST_OS=Windows
+    MAKE=make
+    TM_CC=${CC:-gcc}
+    TM_CXX=${CXX:-g++}
+    ;;
   *) echo "Unsupported OS for this helper: $HOST_OS" >&2; exit 2 ;;
 esac
 
@@ -264,6 +270,10 @@ if [ "$HOST_OS" = FreeBSD ]; then
     exit 1
   }
 
+elif [ "$HOST_OS" = Windows ]; then
+  echo "Configuring PJSIP for Windows/MinGW-w64..."
+  CFLAGS="${CFLAGS:-}-O2" CXXFLAGS="${CXXFLAGS:-}-O2" CC="$TM_CC" CXX="$TM_CXX" \
+    ./configure --prefix="$PREFIX" --disable-video
 else
   CFLAGS="$PIC_CFLAGS" CXXFLAGS="$PIC_CXXFLAGS" CC="$TM_CC" CXX="$TM_CXX" \
     ./configure --prefix="$PREFIX" --disable-video
@@ -316,6 +326,10 @@ case "$HOST_OS" in
     TM_OS=linux
     BUILD_ID="2.17-tm64-pic-linux-$(uname -m 2>/dev/null || echo unknown)-v9"
     ;;
+  Windows)
+    TM_OS=windows
+    BUILD_ID="2.17-sak64-windows-mingw-$(uname -m 2>/dev/null || echo x86_64)-v1"
+    ;;
   FreeBSD)
     TM_OS=freebsd
     pc="$PREFIX/lib/pkgconfig/libpjproject.pc"
@@ -346,7 +360,10 @@ printf '%s\n' "$BUILD_ID" > "$PREFIX/.trunkmonkey-pjsip-build"
 echo
 echo "PJSIP installed to $PREFIX"
 echo "PJSUA_MAX_CALLS is configured for 64; PJ_IOQUEUE_MAX_HANDLES is configured for 256."
-if [ "$HOST_OS" = FreeBSD ]; then
+if [ "$HOST_OS" = Windows ]; then
+  echo "Windows audio backend: PJSIP native Windows audio backend."
+  echo "Windows CLI/GUI use the same PJSUA2 core as Linux/FreeBSD."
+elif [ "$HOST_OS" = FreeBSD ]; then
   echo "FreeBSD audio backend: external PortAudio."
   echo "FreeBSD C++ ABI: base Clang/libc++."
   echo "FreeBSD optional PJSIP deps: deterministic/minimal (PortAudio/Opus/G.729/libuuid enabled; no WebRTC AEC, UPnP, AMR, SILK, or video extras)."

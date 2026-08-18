@@ -1,3 +1,11 @@
+## S.I.P.H.E.R. 1.0.0 r8 — Automated chained audit / FreeBSD pthread fix
+
+- Link CaptureManager regression test with `Threads::Threads` on all platforms.
+- Add chained audit orchestration, risk prioritization, and remediation report generation.
+- Add guided CLI/GUI audit navigation and progress reporting.
+- Unify cross-platform PBX audit networking and Windows Winsock implementation.
+- Add security posture checks for disclosure, method surface, cleartext transports, TLS indicators, and correlated auth evidence.
+
 # S.I.P.H.E.R. 2.0.0 — Diagnostics & Security Suite — 2026-08-16
 
 ## Unix r20 FreeBSD/Release test deadlock hotfix

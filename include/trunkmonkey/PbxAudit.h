@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -73,6 +74,42 @@ struct ExtensionAuditEntry {
     std::string assessment;
 };
 
+// Options for the one-click / one-command chained audit. Scope-expanding
+// extension enumeration is opt-in; all other stages are bounded single-target
+// checks. Public CVE correlation is metadata-only and never executes exploits.
+struct AutomatedAuditOptions {
+    std::string host;
+    std::string username;
+    std::uint16_t port{5060};
+    std::uint16_t tlsPort{5061};
+    AuditTransport transport{AuditTransport::Udp};
+    unsigned timeoutMs{1500};
+    bool includeVulnerabilityLookup{true};
+    bool includeParserAudit{true};
+    bool includeResilienceAudit{true};
+    bool includeTlsAudit{true};
+    bool includeExtensionAudit{false};
+    unsigned extensionFirst{100};
+    unsigned extensionLast{120};
+};
+
+struct AutomatedAuditResult {
+    AutomatedAuditOptions options;
+    PbxFingerprint fingerprint;
+    std::vector<AuditResponse> responses;
+    std::vector<ExtensionAuditEntry> extensions;
+    std::string tlsSummary;
+    std::string vulnerabilityReport;
+    std::vector<AuditFinding> postureFindings;
+    unsigned highCount{0};
+    unsigned warnCount{0};
+    unsigned passCount{0};
+    unsigned infoCount{0};
+    std::string toText() const;
+};
+
+using AuditProgressCallback=std::function<void(unsigned phase,unsigned total,const std::string& label)>;
+
 class PbxAudit {
 public:
     static constexpr const char* warningText() {
@@ -93,6 +130,17 @@ public:
                                       std::uint16_t port=5060,
                                       AuditTransport transport=AuditTransport::Udp,
                                       unsigned timeoutMs=1800);
+
+    // Reuses an already-collected service probe so the automated pipeline can
+    // pass stage output forward rather than re-probing the same target.
+    static PbxFingerprint fingerprintFromProbe(const AuditResponse& probe);
+
+    // Chained audit pipeline: reachability -> fingerprint -> method/auth policy
+    // -> standards checks -> alternate transport -> parser/rate resilience ->
+    // optional extension range -> TLS -> public vulnerability metadata.
+    // Later stages are conditionally driven by earlier results.
+    static AutomatedAuditResult automatedAudit(const AutomatedAuditOptions& options,
+                                                const AuditProgressCallback& progress={});
 
     // Correlates a fingerprint with public vulnerability metadata. NVD is queried
     // through its CVE 2.0 API; Exploit-DB correlation uses the official Exploit-DB CSV metadata cache. No exploit code is executed.

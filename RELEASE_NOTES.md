@@ -1,3 +1,15 @@
+# S.I.P.H.E.R. 1.0.0 r8 — Chained Security Audit + FreeBSD pthread Fix
+
+- Fixed the FreeBSD/Clang `pthread_create` linker failure in `tm-capture-manager-test` by linking the standalone CaptureManager test target to CMake `Threads::Threads`.
+- Added **Automated Chained Audit** so service evidence flows into fingerprinting, auth/oracle interpretation, transport/TLS checks, vulnerability metadata correlation, and one prioritized report.
+- Added HIGH/WARN/PASS/INFO posture counts and deduplicated remediation guidance.
+- Added posture checks for detailed banner/version disclosure, private topology-address disclosure, optional SIP method exposure, UDP/TCP cleartext transport surface, Digest algorithm posture, TLS legacy protocol/cipher indicators, and TLS certificate trust/identity validation.
+- Made extension differential testing opt-in in the automated workflow and kept bounded parser/rate checks non-destructive.
+- Reworked the GUI PBX Audit tab around a primary **RUN AUTOMATED CHAINED AUDIT** action with phase progress and explicit feature toggles.
+- Added CLI `audit-auto`, made bare `audit` open the guided audit menu, and retained `audit-full` as a compatibility alias.
+- Unified the Windows and Unix PBX audit core so the Windows portable build uses the same chained audit logic with Winsock.
+- Retains r7 automatic RTP/RTCP Wireshark decode mapping.
+
 # S.I.P.H.E.R. 1.0.0 r7 — Automatic RTP/RTCP Wireshark Decode
 
 - Adds **OPEN LAST PCAP (AUTO RTP)** to the Qt GUI. After an RTP-only or combined call capture is stopped, S.I.P.H.E.R. launches Wireshark with the selected call's negotiated/observed RTP and RTCP UDP ports supplied as command-line Decode As rules.

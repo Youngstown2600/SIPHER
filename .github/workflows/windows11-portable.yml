@@ -1,0 +1,53 @@
+name: Windows 11 Portable Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows11:
+    name: S.I.P.H.E.R. r8 Windows 10/11 x64
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Set up MSYS2 / MinGW64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+            make
+            sed
+            gawk
+            grep
+            coreutils
+            diffutils
+            patch
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-qt6-base
+            mingw-w64-x86_64-curl
+            mingw-w64-x86_64-openssl
+            mingw-w64-x86_64-ffmpeg
+            mingw-w64-x86_64-ca-certificates
+
+      - name: Build and test portable Windows package
+        run: ./windows/build-portable.sh win10 --no-install-deps --clean
+
+      - name: Upload Windows 11 portable folder
+        uses: actions/upload-artifact@v7
+        with:
+          name: SIPHER-1.0.0-r8-Windows10-11-Portable-x64
+          path: dist/SIPHER-1.0.0-r8-Windows10-11-Portable-x64/
+          if-no-files-found: error

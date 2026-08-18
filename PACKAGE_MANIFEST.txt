@@ -1,6 +1,13 @@
-S.I.P.H.E.R. 1.0.0 r7 — Linux / FreeBSD release
+S.I.P.H.E.R. 1.0.0 r8 — Linux / FreeBSD release
 
 Base core: TrunkMonkey 2.0.0 Unix r20
+
+r8 additions:
+- FreeBSD pthread link fix for the CaptureManager regression target.
+- Automated chained PBX/SIP audit with prioritized report and remediation.
+- GUI/CLI guided audit workflow and progress feedback.
+- Unified Windows/Unix PBX audit core and Windows Winsock support.
+- Additional posture checks: banner/version disclosure, method surface, cleartext transport exposure, TLS legacy indicators, and correlated audit evidence.
 
 r7 additions:
 - Automatic Wireshark RTP/RTCP Decode As launch for captured calls

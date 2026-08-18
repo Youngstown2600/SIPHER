@@ -84,6 +84,7 @@ private:
     };
     bool enabled_{false};
     bool color_{false};
+    bool vtEnabled_{false};
     bool consoleTty_{false};
     std::string themeName_{"classic"};
     Palette palette_;

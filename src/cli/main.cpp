@@ -23,7 +23,12 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-#ifndef _WIN32
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
 #include <sys/stat.h>
 #include <poll.h>
 #include <signal.h>
@@ -144,7 +149,10 @@ std::string promptValue(const std::string& label,const std::string& current)
 std::string promptSecret(const std::string& label,const std::string& current)
 {
     std::cout<<label<<(current.empty()?"":" [saved; Enter keeps current]")<<": "<<std::flush;
-#ifndef _WIN32
+#ifdef _WIN32
+    const HANDLE input=GetStdHandle(STD_INPUT_HANDLE);DWORD oldMode=0;bool changed=false;
+    if(input!=INVALID_HANDLE_VALUE&&GetConsoleMode(input,&oldMode)){changed=SetConsoleMode(input,oldMode&~ENABLE_ECHO_INPUT)!=0;}
+#else
     termios oldt{};
     bool changed=false;
     if(::isatty(STDIN_FILENO)&&::tcgetattr(STDIN_FILENO,&oldt)==0){
@@ -155,7 +163,9 @@ std::string promptSecret(const std::string& label,const std::string& current)
 #endif
     std::string value;
     const bool ok=static_cast<bool>(std::getline(std::cin,value));
-#ifndef _WIN32
+#ifdef _WIN32
+    if(changed){SetConsoleMode(input,oldMode);std::cout<<'\n';}
+#else
     if(changed){::tcsetattr(STDIN_FILENO,TCSANOW,&oldt);std::cout<<'\n';}
 #endif
     if(!ok) throw std::runtime_error("profile editing cancelled");
@@ -282,6 +292,9 @@ Advanced Commands:
  blast-file-audio <count> <interval-ms> <destinations.txt> <audio.(wav|mp3)> [callerids.txt]
 
 PBX Audit (authorized systems only; active SIP probes):
+ audit                         open the guided audit menu
+ audit-auto <host> [user|-] [port] [udp|tcp] [ext-first ext-last]
+                               recommended chained audit + prioritized report
  audit-warning
  audit-fingerprint <host> [port] [udp|tcp]
  audit-vulns <host> [port] [udp|tcp]     fingerprint + NVD/Exploit-DB metadata
@@ -296,7 +309,7 @@ PBX Audit (authorized systems only; active SIP probes):
  audit-resilience <host> [port] [udp|tcp]   capped low-volume rate test
  audit-scenario <host> [user] [port] [udp|tcp]  real-world-style attack chain
  audit-tls <host> [port]
- audit-full <host> [port] [udp|tcp]
+ audit-full <host> [port] [udp|tcp]     compatibility alias for audit-auto
  audit-save <file>             save the most recent PBX audit report
  cancel-launch | help | quit
 
@@ -513,7 +526,7 @@ std::string guidedOperatorWorkflow(CliDashboard& dashboard,const SipEngine& engi
                  <<"Active tests may trigger IDS/IPS, alarms, rate limits, or PBX protection controls.\n\n";
         const auto confirm=askOperator("Type YES to continue");if(confirm!="YES")return{};
         const int action=askOperatorChoice("Audit type",{
-            "PBX / SIP fingerprint","Fingerprint + NIST CVE / Exploit-DB lookup","Full engineering audit","Single SIP service probe","Discover SIP hosts in a small CIDR","Extension differential audit","SIP method-policy audit","Authentication challenge audit","Digest/account-oracle audit","Compliance checks","Parser-abuse simulation (bounded)","Rate-resilience simulation (capped)","Attack-scenario simulation","TLS audit","Save last audit report"
+            "AUTOMATED CHAINED AUDIT (recommended)","PBX / SIP fingerprint","Fingerprint + NIST CVE / Exploit-DB lookup","Single SIP service probe","Discover SIP hosts in a small CIDR","Extension differential audit","SIP method-policy audit","Authentication challenge audit","Digest/account-oracle audit","Compliance checks","Parser-abuse simulation (bounded)","Rate-resilience simulation (capped)","Attack-scenario simulation","TLS audit","Save last audit report"
         });
         if(action==0)return{};
         if(action==15){const auto path=askOperator("Report file","sipher-pbx-audit.txt");return"audit-save "+commandArg(path);}
@@ -521,9 +534,15 @@ std::string guidedOperatorWorkflow(CliDashboard& dashboard,const SipEngine& engi
         const auto host=askOperator("PBX / SIP host");if(host.empty())return{};
         if(action==14){const auto port=askOperator("TLS port","5061");return"audit-tls "+host+" "+port;}
         const auto port=askOperator("SIP port","5060");const auto tr=askOperator("Transport (udp/tcp)","udp");
-        if(action==1)return"audit-fingerprint "+host+" "+port+" "+tr;
-        if(action==2)return"audit-vulns "+host+" "+port+" "+tr;
-        if(action==3)return"audit-full "+host+" "+port+" "+tr;
+        if(action==1){
+            auto user=askOperator("Known authorized test account (blank = no account differential)",engine.profile().username);
+            if(user.empty())user="-";
+            const auto ext=askOperator("Include extension-range differential stage? Type YES to include","NO");
+            if(ext=="YES"){const auto first=askOperator("First extension","100");const auto last=askOperator("Last extension","120");return"audit-auto "+host+" "+commandArg(user)+" "+port+" "+tr+" "+first+" "+last;}
+            return"audit-auto "+host+" "+commandArg(user)+" "+port+" "+tr;
+        }
+        if(action==2)return"audit-fingerprint "+host+" "+port+" "+tr;
+        if(action==3)return"audit-vulns "+host+" "+port+" "+tr;
         if(action==4)return"audit-probe "+host+" "+port+" "+tr;
         if(action==6){const auto first=askOperator("First extension");const auto last=askOperator("Last extension");return"audit-ext "+host+" "+first+" "+last+" "+port+" "+tr;}
         if(action==7)return"audit-methods "+host+" "+port+" "+tr;
@@ -572,9 +591,9 @@ std::string guidedOperatorWorkflow(CliDashboard& dashboard,const SipEngine& engi
     return{};
 }
 
+std::string gPendingInput;
 #ifndef _WIN32
 volatile sig_atomic_t gTerminalResized=0;
-std::string gPendingInput;
 void onTerminalResize(int){gTerminalResized=1;}
 #endif
 
@@ -583,7 +602,27 @@ bool readInteractiveCommand(bool dashboardEnabled,std::string& line,int& altPage
     altPage=0;
     if(!dashboardEnabled) return static_cast<bool>(std::getline(std::cin,line));
 #ifdef _WIN32
-    return static_cast<bool>(std::getline(std::cin,line));
+    const HANDLE input=GetStdHandle(STD_INPUT_HANDLE);DWORD oldMode=0;
+    if(input==INVALID_HANDLE_VALUE||!GetConsoleMode(input,&oldMode))return static_cast<bool>(std::getline(std::cin,line));
+    DWORD rawMode=oldMode;rawMode&=~(ENABLE_LINE_INPUT|ENABLE_ECHO_INPUT);rawMode|=ENABLE_WINDOW_INPUT|ENABLE_PROCESSED_INPUT;
+    if(!SetConsoleMode(input,rawMode))return static_cast<bool>(std::getline(std::cin,line));
+    struct RestoreConsole{HANDLE h;DWORD mode;~RestoreConsole(){SetConsoleMode(h,mode);}} restore{input,oldMode};
+    line=gPendingInput;if(!line.empty())std::cout<<line<<std::flush;
+    for(;;){
+        INPUT_RECORD rec{};DWORD count=0;if(!ReadConsoleInputA(input,&rec,1,&count)||count==0)return false;
+        if(rec.EventType==WINDOW_BUFFER_SIZE_EVENT){gPendingInput=line;line="__resize__";return true;}
+        if(rec.EventType!=KEY_EVENT||!rec.Event.KeyEvent.bKeyDown)continue;
+        const auto& key=rec.Event.KeyEvent;const DWORD mods=key.dwControlKeyState;
+        const bool alt=(mods&(LEFT_ALT_PRESSED|RIGHT_ALT_PRESSED))!=0;
+        if(alt&&key.wVirtualKeyCode>=static_cast<WORD>('1')&&key.wVirtualKeyCode<=static_cast<WORD>('9')){gPendingInput.clear();altPage=static_cast<int>(key.wVirtualKeyCode-'0');std::cout<<"\r\n"<<std::flush;return true;}
+        if(key.wVirtualKeyCode==VK_PRIOR){line="log-up 20";gPendingInput.clear();std::cout<<"\r\n"<<std::flush;return true;}
+        if(key.wVirtualKeyCode==VK_NEXT){line="log-down 20";gPendingInput.clear();std::cout<<"\r\n"<<std::flush;return true;}
+        if(key.wVirtualKeyCode==VK_RETURN){gPendingInput.clear();std::cout<<"\r\n"<<std::flush;return true;}
+        if(key.wVirtualKeyCode==VK_BACK){if(!line.empty()){line.pop_back();std::cout<<"\b \b"<<std::flush;}continue;}
+        const char ch=key.uChar.AsciiChar;
+        if((mods&(LEFT_CTRL_PRESSED|RIGHT_CTRL_PRESSED))&&ch==4&&line.empty()){gPendingInput.clear();return false;}
+        if(ch>=32&&ch<127){line.push_back(ch);std::cout<<ch<<std::flush;}
+    }
 #else
     termios oldt{};
     if(tcgetattr(STDIN_FILENO,&oldt)!=0) return static_cast<bool>(std::getline(std::cin,line));
@@ -631,6 +670,7 @@ void plainBanner()
 
 int main(int argc,char** argv)
 {
+    runtime::configurePortableEnvironment();
     try{
         runtime::ensureUserDirectories();
     }catch(const std::exception& error){
@@ -732,6 +772,7 @@ int main(int argc,char** argv)
             else if(cmd=="commands") cmd="help";
             if(cmd=="0" || cmd=="quit" || cmd=="exit") break;
             int guidedCategory=-1;
+            if(cmd=="audit"){in>>std::ws;if(in.eof())guidedCategory=5;else cmd="audit-auto";}
             if(cmd=="menu" || cmd=="m") guidedCategory=0;
             else if(cmd.size()<=2 && std::all_of(cmd.begin(),cmd.end(),[](unsigned char c){return std::isdigit(c);})) {
                 try{guidedCategory=std::stoi(cmd);}catch(...){guidedCategory=-1;}
@@ -944,6 +985,19 @@ int main(int argc,char** argv)
                 const int id=requireCallId(in);std::string path=readArg(in);focusCallId=id;
                 if(path.empty()){dashboard.showOverlay("CALL DIAGNOSTIC REPORT — "+std::to_string(id),engine.callReport(id),std::cout);dashboard.pauseForEnter(std::cin,std::cout);}
                 else{engine.exportCallReport(id,path);addNotice("Call report exported: "+path,DashboardNotice::Level::Success);}
+            }else if(cmd=="audit-auto"){
+                std::string host,user=engine.profile().username,transport="udp";unsigned port=5060,first=0,last=0;
+                in>>host;if(host.empty())throw std::runtime_error("audit-auto requires a host");
+                in>>std::ws;if(!in.eof()){in>>user;if(user=="-")user.clear();}
+                in>>std::ws;if(!in.eof())in>>port;
+                in>>std::ws;if(!in.eof())in>>transport;
+                in>>std::ws;if(!in.eof()){if(!(in>>first>>last))throw std::runtime_error("optional extension stage requires both first and last extension");}
+                AutomatedAuditOptions opt;opt.host=host;opt.username=user;opt.port=static_cast<std::uint16_t>(port);opt.transport=PbxAudit::transportFromString(transport);
+                if(first||last){if(!first||!last)throw std::runtime_error("both extension range endpoints are required");opt.includeExtensionAudit=true;opt.extensionFirst=first;opt.extensionLast=last;}
+                std::ostringstream progressText;
+                auto result=PbxAudit::automatedAudit(opt,[&](unsigned phase,unsigned total,const std::string&label){progressText<<"["<<phase<<"/"<<total<<"] "<<label<<"\n";});
+                lastAuditReport=result.toText();
+                dashboard.showOverlay("PBX AUDIT — AUTOMATED CHAIN",progressText.str()+"\n"+lastAuditReport,std::cout);dashboard.pauseForEnter(std::cin,std::cout);
             }else if(cmd=="audit-warning"){
                 dashboard.showOverlay("PBX AUDIT WARNING",PbxAudit::warningText(),std::cout);dashboard.pauseForEnter(std::cin,std::cout);
             }else if(cmd=="audit-fingerprint"){
@@ -986,8 +1040,9 @@ int main(int argc,char** argv)
                 std::string host;unsigned port=5061;in>>host;if(host.empty())throw std::runtime_error("audit-tls requires a host");in>>std::ws;if(!in.eof())in>>port;
                 const auto tls=PbxAudit::tlsAudit(host,static_cast<std::uint16_t>(port));lastAuditReport=PbxAudit::report("PBX TLS AUDIT",{}, {},tls);dashboard.showOverlay("PBX AUDIT — TLS",lastAuditReport,std::cout);dashboard.pauseForEnter(std::cin,std::cout);
             }else if(cmd=="audit-full"){
-                std::string host,transport="udp";unsigned port=5060;in>>host;if(host.empty())throw std::runtime_error("audit-full requires a host");in>>std::ws;if(!in.eof())in>>port>>transport;const auto t=PbxAudit::transportFromString(transport);
-                auto rs=PbxAudit::attackScenarioAudit(host,engine.profile().username,static_cast<std::uint16_t>(port),t);const auto alt=t==AuditTransport::Udp?AuditTransport::Tcp:AuditTransport::Udp;rs.push_back(PbxAudit::serviceProbe(host,static_cast<std::uint16_t>(port),alt));auto more=PbxAudit::complianceAudit(host,static_cast<std::uint16_t>(port),t);rs.insert(rs.end(),more.begin(),more.end());std::string tls;try{tls=PbxAudit::tlsAudit(host,5061,3500);}catch(const std::exception&e){tls=std::string("TLS probe unavailable: ")+e.what();}lastAuditReport=PbxAudit::report("FULL PBX ENGINEERING AUDIT",rs,{},tls);dashboard.showOverlay("PBX AUDIT — FULL",lastAuditReport,std::cout);dashboard.pauseForEnter(std::cin,std::cout);
+                std::string host,transport="udp";unsigned port=5060;in>>host;if(host.empty())throw std::runtime_error("audit-full requires a host");in>>std::ws;if(!in.eof())in>>port>>transport;
+                AutomatedAuditOptions opt;opt.host=host;opt.username=engine.profile().username;opt.port=static_cast<std::uint16_t>(port);opt.transport=PbxAudit::transportFromString(transport);
+                auto result=PbxAudit::automatedAudit(opt);lastAuditReport=result.toText();dashboard.showOverlay("PBX AUDIT — AUTOMATED FULL",lastAuditReport,std::cout);dashboard.pauseForEnter(std::cin,std::cout);
             }else if(cmd=="audit-save"){
                 std::string path=readArg(in);if(path.empty())throw std::runtime_error("audit-save requires a file path");if(lastAuditReport.empty())throw std::runtime_error("no PBX audit has been run yet");PbxAudit::saveReport(path,lastAuditReport);addNotice("PBX audit report saved: "+path,DashboardNotice::Level::Success);
             }else if(cmd=="blast"){

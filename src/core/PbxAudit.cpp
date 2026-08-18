@@ -1,8 +1,10 @@
 #include "trunkmonkey/PbxAudit.h"
+#include "trunkmonkey/RuntimePaths.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdlib>
+#include <cstdio>
 #include <cctype>
 #include <cerrno>
 #include <cstring>
@@ -12,12 +14,20 @@
 #include <map>
 #include <set>
 #include <random>
+#include <regex>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
 #include <vector>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <fcntl.h>
@@ -38,6 +48,31 @@ namespace {
 
 std::string lower(std::string s){for(char&c:s)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));return s;}
 std::string trim(std::string s){while(!s.empty()&&std::isspace(static_cast<unsigned char>(s.front())))s.erase(s.begin());while(!s.empty()&&std::isspace(static_cast<unsigned char>(s.back())))s.pop_back();return s;}
+
+bool isPrivateIpv4(const std::string& text)
+{
+    unsigned a=0,b=0,c=0,d=0;char tail=0;
+    if(std::sscanf(text.c_str(),"%u.%u.%u.%u%c",&a,&b,&c,&d,&tail)!=4||a>255||b>255||c>255||d>255)return false;
+    return a==10 || (a==172&&b>=16&&b<=31) || (a==192&&b==168);
+}
+
+std::vector<std::string> privateIpv4Addresses(const std::string& text)
+{
+    static const std::regex ip(R"((?:^|[^0-9])((?:[0-9]{1,3}\.){3}[0-9]{1,3})(?=$|[^0-9]))");
+    std::vector<std::string> out;
+    for(std::sregex_iterator it(text.begin(),text.end(),ip),end;it!=end;++it){
+        const auto value=(*it)[1].str();
+        if(isPrivateIpv4(value)&&std::find(out.begin(),out.end(),value)==out.end()){out.push_back(value);if(out.size()>=5)break;}
+    }
+    return out;
+}
+
+bool looksLikeIpv4Literal(const std::string& host)
+{
+    unsigned a=0,b=0,c=0,d=0;char tail=0;
+    return std::sscanf(host.c_str(),"%u.%u.%u.%u%c",&a,&b,&c,&d,&tail)==4&&a<=255&&b<=255&&c<=255&&d<=255;
+}
+
 
 
 std::string urlEncode(const std::string& input)
@@ -77,10 +112,40 @@ std::vector<std::string> csvFields(const std::string& line)
     for(std::size_t i=0;i<line.size();++i){const char c=line[i];if(c=='"'){if(quoted&&i+1<line.size()&&line[i+1]=='"'){cur.push_back('"');++i;}else quoted=!quoted;}else if(c==','&&!quoted){fields.push_back(cur);cur.clear();}else cur.push_back(c);}fields.push_back(cur);return fields;
 }
 
-#ifndef _WIN32
 std::string runProgramCapture(const std::vector<std::string>& args,unsigned timeoutMs,int* exitCode=nullptr)
 {
     if(args.empty())return{};
+#ifdef _WIN32
+    auto quote=[](const std::string& arg){
+        if(arg.find_first_of(" \t\"")==std::string::npos)return arg;
+        std::string out="\"";unsigned slashes=0;
+        for(char c:arg){
+            if(c=='\\'){++slashes;continue;}
+            if(c=='\"'){out.append(slashes*2+1,'\\');out.push_back('\"');slashes=0;continue;}
+            out.append(slashes,'\\');slashes=0;out.push_back(c);
+        }
+        out.append(slashes*2,'\\');out.push_back('\"');return out;
+    };
+    std::string command;
+    for(const auto& a:args){if(!command.empty())command.push_back(' ');command+=quote(a);}
+    SECURITY_ATTRIBUTES sa{sizeof(sa),nullptr,TRUE};HANDLE readPipe=nullptr,writePipe=nullptr;
+    if(!CreatePipe(&readPipe,&writePipe,&sa,0))throw std::runtime_error("CreatePipe failed: "+std::to_string(GetLastError()));
+    SetHandleInformation(readPipe,HANDLE_FLAG_INHERIT,0);
+    STARTUPINFOA si{};si.cb=sizeof(si);si.dwFlags=STARTF_USESTDHANDLES|STARTF_USESHOWWINDOW;si.wShowWindow=SW_HIDE;si.hStdInput=GetStdHandle(STD_INPUT_HANDLE);si.hStdOutput=writePipe;si.hStdError=writePipe;
+    PROCESS_INFORMATION pi{};std::vector<char> cmd(command.begin(),command.end());cmd.push_back('\0');
+    if(!CreateProcessA(nullptr,cmd.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW,nullptr,nullptr,&si,&pi)){
+        const auto err=GetLastError();CloseHandle(readPipe);CloseHandle(writePipe);if(exitCode)*exitCode=static_cast<int>(err);return{};
+    }
+    CloseHandle(writePipe);std::string out;std::array<char,4096> b{};const auto start=std::chrono::steady_clock::now();DWORD processCode=STILL_ACTIVE;
+    for(;;){
+        DWORD avail=0;if(PeekNamedPipe(readPipe,nullptr,0,nullptr,&avail,nullptr)&&avail){DWORD got=0;const DWORD want=static_cast<DWORD>(std::min<std::size_t>(b.size(),avail));if(ReadFile(readPipe,b.data(),want,&got,nullptr)&&got)out.append(b.data(),got);}
+        if(GetExitCodeProcess(pi.hProcess,&processCode)&&processCode!=STILL_ACTIVE)break;
+        if(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count()>timeoutMs){TerminateProcess(pi.hProcess,124);WaitForSingleObject(pi.hProcess,1000);processCode=124;break;}
+        Sleep(20);
+    }
+    for(;;){DWORD got=0;if(!ReadFile(readPipe,b.data(),static_cast<DWORD>(b.size()),&got,nullptr)||!got)break;out.append(b.data(),got);}
+    CloseHandle(readPipe);CloseHandle(pi.hThread);CloseHandle(pi.hProcess);if(exitCode)*exitCode=static_cast<int>(processCode);return out;
+#else
     int pipefd[2];if(pipe(pipefd)!=0)throw std::runtime_error("pipe() failed: "+std::string(std::strerror(errno)));
     posix_spawn_file_actions_t a;posix_spawn_file_actions_init(&a);posix_spawn_file_actions_addopen(&a,STDIN_FILENO,"/dev/null",O_RDONLY,0);posix_spawn_file_actions_adddup2(&a,pipefd[1],STDOUT_FILENO);posix_spawn_file_actions_adddup2(&a,pipefd[1],STDERR_FILENO);posix_spawn_file_actions_addclose(&a,pipefd[0]);
     std::vector<std::string> local=args;std::vector<char*> argv;for(auto&x:local)argv.push_back(x.data());argv.push_back(nullptr);
@@ -90,8 +155,8 @@ std::string runProgramCapture(const std::vector<std::string>& args,unsigned time
     std::string out;std::array<char,4096>b{};const auto start=std::chrono::steady_clock::now();int status=0;bool done=false;
     while(!done){for(;;){const auto n=read(pipefd[0],b.data(),b.size());if(n>0)out.append(b.data(),static_cast<std::size_t>(n));else break;}const auto w=waitpid(pid,&status,WNOHANG);if(w==pid)done=true;else if(w<0)done=true;else if(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count()>timeoutMs){kill(pid,SIGTERM);std::this_thread::sleep_for(std::chrono::milliseconds(50));kill(pid,SIGKILL);waitpid(pid,&status,0);status=124<<8;done=true;}else std::this_thread::sleep_for(std::chrono::milliseconds(25));}
     for(;;){const auto n=read(pipefd[0],b.data(),b.size());if(n>0)out.append(b.data(),static_cast<std::size_t>(n));else break;}close(pipefd[0]);if(exitCode)*exitCode=(WIFEXITED(status)?WEXITSTATUS(status):128);return out;
-}
 #endif
+}
 
 std::string extractVersion(const std::string& banner,const std::string& needle)
 {
@@ -183,54 +248,81 @@ std::string sipRequest(const std::string& method,const std::string& uri,const st
     return s.str();
 }
 
-#ifndef _WIN32
+#ifdef _WIN32
+struct WsaScope{
+    WsaScope(){WSADATA data{};const int rc=WSAStartup(MAKEWORD(2,2),&data);if(rc!=0)throw std::runtime_error("WSAStartup failed: "+std::to_string(rc));}
+    ~WsaScope(){WSACleanup();}
+};
+using SocketHandle=SOCKET;
+constexpr SocketHandle invalidSocket=INVALID_SOCKET;
+void closeSocket(SocketHandle s){if(s!=INVALID_SOCKET)closesocket(s);}
+std::string socketError(){return "Winsock error "+std::to_string(WSAGetLastError());}
+#else
+using SocketHandle=int;
+constexpr SocketHandle invalidSocket=-1;
+void closeSocket(SocketHandle s){if(s>=0)::close(s);}
+std::string socketError(){return std::strerror(errno);}
+#endif
+
 struct AddrList{addrinfo*p{nullptr};~AddrList(){if(p)freeaddrinfo(p);}};
 
 AddrList resolve(const std::string&host,std::uint16_t port,int socktype)
 {
+#ifdef _WIN32
+    WsaScope wsa;
+#endif
     addrinfo hints{};hints.ai_family=AF_UNSPEC;hints.ai_socktype=socktype;hints.ai_protocol=(socktype==SOCK_DGRAM?IPPROTO_UDP:IPPROTO_TCP);
     AddrList out;const auto ps=std::to_string(port);const int rc=getaddrinfo(host.c_str(),ps.c_str(),&hints,&out.p);
-    if(rc!=0)throw std::runtime_error("Unable to resolve "+host+": "+gai_strerror(rc));
+    if(rc!=0)throw std::runtime_error("Unable to resolve "+host+" (getaddrinfo "+std::to_string(rc)+")");
     return out;
 }
 
-bool connectTimed(int fd,const sockaddr*sa,socklen_t len,unsigned timeoutMs)
+bool connectTimed(SocketHandle fd,const sockaddr*sa,socklen_t len,unsigned timeoutMs)
 {
+#ifdef _WIN32
+    u_long nonBlocking=1;if(ioctlsocket(fd,FIONBIO,&nonBlocking)!=0)return false;
+    int rc=::connect(fd,sa,len);if(rc==0){nonBlocking=0;ioctlsocket(fd,FIONBIO,&nonBlocking);return true;}
+    if(WSAGetLastError()!=WSAEWOULDBLOCK){nonBlocking=0;ioctlsocket(fd,FIONBIO,&nonBlocking);return false;}
+    fd_set wf;FD_ZERO(&wf);FD_SET(fd,&wf);timeval tv{static_cast<long>(timeoutMs/1000),static_cast<long>((timeoutMs%1000)*1000)};
+    rc=select(0,nullptr,&wf,nullptr,&tv);if(rc<=0){nonBlocking=0;ioctlsocket(fd,FIONBIO,&nonBlocking);return false;}int err=0;int el=sizeof(err);getsockopt(fd,SOL_SOCKET,SO_ERROR,reinterpret_cast<char*>(&err),&el);nonBlocking=0;ioctlsocket(fd,FIONBIO,&nonBlocking);return err==0;
+#else
     const int old=fcntl(fd,F_GETFL,0);if(old<0)return false;if(fcntl(fd,F_SETFL,old|O_NONBLOCK)<0)return false;
     int rc=::connect(fd,sa,len);if(rc==0){fcntl(fd,F_SETFL,old);return true;}if(errno!=EINPROGRESS){fcntl(fd,F_SETFL,old);return false;}
     fd_set wf;FD_ZERO(&wf);FD_SET(fd,&wf);timeval tv{static_cast<long>(timeoutMs/1000),static_cast<long>((timeoutMs%1000)*1000)};
     rc=select(fd+1,nullptr,&wf,nullptr,&tv);if(rc<=0){fcntl(fd,F_SETFL,old);return false;}int err=0;socklen_t el=sizeof(err);getsockopt(fd,SOL_SOCKET,SO_ERROR,&err,&el);fcntl(fd,F_SETFL,old);return err==0;
+#endif
 }
 
 std::string transact(const std::string&host,std::uint16_t port,AuditTransport transport,const std::string&request,unsigned timeoutMs,double&latency)
 {
+#ifdef _WIN32
+    WsaScope wsa;
+#endif
     const int st=transport==AuditTransport::Udp?SOCK_DGRAM:SOCK_STREAM;auto addrs=resolve(host,port,st);std::string lastError="No usable address";
     for(auto*ai=addrs.p;ai;ai=ai->ai_next){
-        int fd=::socket(ai->ai_family,ai->ai_socktype,ai->ai_protocol);if(fd<0){lastError=std::strerror(errno);continue;}
+        SocketHandle fd=::socket(ai->ai_family,ai->ai_socktype,ai->ai_protocol);if(fd==invalidSocket){lastError=socketError();continue;}
+#ifdef _WIN32
+        DWORD timeout=timeoutMs;setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,reinterpret_cast<const char*>(&timeout),sizeof(timeout));setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,reinterpret_cast<const char*>(&timeout),sizeof(timeout));
+#else
         timeval tv{static_cast<long>(timeoutMs/1000),static_cast<long>((timeoutMs%1000)*1000)};setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&tv,sizeof(tv));setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&tv,sizeof(tv));
-        const auto started=std::chrono::steady_clock::now();
-        ssize_t sent=-1;
-        if(transport==AuditTransport::Udp) sent=sendto(fd,request.data(),request.size(),0,ai->ai_addr,static_cast<socklen_t>(ai->ai_addrlen));
-        else if(connectTimed(fd,ai->ai_addr,static_cast<socklen_t>(ai->ai_addrlen),timeoutMs)) sent=send(fd,request.data(),request.size(),0);
-        if(sent<0){lastError=std::strerror(errno);::close(fd);continue;}
+#endif
+        const auto started=std::chrono::steady_clock::now();int sent=-1;
+        if(transport==AuditTransport::Udp) sent=static_cast<int>(sendto(fd,request.data(),static_cast<int>(request.size()),0,ai->ai_addr,static_cast<socklen_t>(ai->ai_addrlen)));
+        else if(connectTimed(fd,ai->ai_addr,static_cast<socklen_t>(ai->ai_addrlen),timeoutMs)) sent=send(fd,request.data(),static_cast<int>(request.size()),0);
+        if(sent<0){lastError=socketError();closeSocket(fd);continue;}
         std::array<char,65536>buf{};std::string raw;
-        for(;;){const ssize_t n=recv(fd,buf.data(),buf.size(),0);if(n>0){raw.append(buf.data(),static_cast<std::size_t>(n));if(raw.find("\r\n\r\n")!=std::string::npos||transport==AuditTransport::Udp)break;continue;}break;}
-        latency=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();::close(fd);
-        if(!raw.empty())return raw;
+        for(;;){const int n=recv(fd,buf.data(),static_cast<int>(buf.size()),0);if(n>0){raw.append(buf.data(),static_cast<std::size_t>(n));if(raw.find("\r\n\r\n")!=std::string::npos||transport==AuditTransport::Udp)break;continue;}break;}
+        latency=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();closeSocket(fd);
+        if(!raw.empty()) return raw;
         lastError="No SIP response before timeout";
     }
     throw std::runtime_error(lastError);
 }
-#endif
 
 AuditResponse run(const std::string&name,const std::string&host,std::uint16_t port,AuditTransport transport,const std::string&req,unsigned timeoutMs)
 {
     AuditResponse r;r.target=host;r.port=port;r.transport=transport;r.testName=name;r.rawRequest=req;r.requestBytes=req.size();
-#ifndef _WIN32
     try{r.rawResponse=transact(host,port,transport,req,timeoutMs,r.latencyMs);r.responseBytes=r.rawResponse.size();parseStatus(r);}catch(const std::exception&e){r.reason=e.what();r.findings.push_back({"INFO","No SIP response",e.what()});return r;}
-#else
-    r.reason="PBX audit networking is implemented for Linux/FreeBSD builds";
-#endif
     return r;
 }
 
@@ -255,7 +347,6 @@ std::string extensionAssessment(int code)
     return "Response differs from a clean not-found result; compare against a known-invalid control.";
 }
 
-#ifndef _WIN32
 std::vector<std::string> cidrHosts(const std::string& cidr)
 {
     const auto slash=cidr.find('/');
@@ -265,6 +356,9 @@ std::vector<std::string> cidrHosts(const std::string& cidr)
     char* end=nullptr;const long prefix=std::strtol(prefixText.c_str(),&end,10);
     if(end==prefixText.c_str()||*end!='\0'||prefix<27||prefix>32)
         throw std::runtime_error("audit discovery is limited to /27 through /32 (maximum 32 addresses per run)");
+#ifdef _WIN32
+    WsaScope wsa;
+#endif
     in_addr a{};if(inet_pton(AF_INET,ip.c_str(),&a)!=1)throw std::runtime_error("audit discovery currently supports IPv4 CIDR only");
     const std::uint32_t host=ntohl(a.s_addr);
     const std::uint32_t mask=prefix==0?0u:(0xffffffffu<<(32-prefix));
@@ -279,7 +373,6 @@ std::vector<std::string> cidrHosts(const std::string& cidr)
     }
     return out;
 }
-#endif
 
 } // namespace
 
@@ -297,7 +390,6 @@ AuditResponse PbxAudit::serviceProbe(const std::string&host,std::uint16_t port,A
 
 std::vector<DiscoveryEntry> PbxAudit::discoverIpv4Cidr(const std::string&cidr,std::uint16_t port,AuditTransport transport,unsigned delayMs,unsigned timeoutMs)
 {
-#ifndef _WIN32
     if(delayMs<100)delayMs=100;
     const auto hosts=cidrHosts(cidr);std::vector<DiscoveryEntry> out;
     for(std::size_t i=0;i<hosts.size();++i){
@@ -306,10 +398,6 @@ std::vector<DiscoveryEntry> PbxAudit::discoverIpv4Cidr(const std::string&cidr,st
         if(i+1<hosts.size())std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
     }
     return out;
-#else
-    (void)cidr;(void)port;(void)transport;(void)delayMs;(void)timeoutMs;
-    throw std::runtime_error("PBX discovery is implemented for Linux/FreeBSD builds");
-#endif
 }
 
 std::vector<AuditResponse> PbxAudit::methodAudit(const std::string&host,std::uint16_t port,AuditTransport transport,unsigned timeoutMs)
@@ -341,7 +429,9 @@ AuditResponse PbxAudit::authenticationAudit(const std::string&host,const std::st
         r.findings.push_back({"PASS","Authentication challenge present","Target challenged unauthenticated registration."});
         const auto a=lower(r.authenticate);
         if(a.find("basic")!=std::string::npos)r.findings.push_back({"HIGH","Basic authentication advertised","SIP authentication challenge appears to use Basic rather than Digest."});
-        if(a.find("algorithm=md5")!=std::string::npos||a.find("algorithm=\"md5\"")!=std::string::npos)r.findings.push_back({"WARN","Digest MD5 in use","Digest challenge advertises MD5; prefer stronger algorithms when endpoint support allows."});
+        if(a.find("algorithm=md5")!=std::string::npos||a.find("algorithm=\"md5\"")!=std::string::npos)r.findings.push_back({"WARN","Digest MD5 in use","Digest challenge advertises MD5; prefer SHA-256-class SIP Digest algorithms when endpoint support allows."});
+        else if(a.find("algorithm=")==std::string::npos&&a.find("digest")!=std::string::npos)r.findings.push_back({"WARN","Digest algorithm not declared","The Digest challenge omits an algorithm token. Verify the PBX is not relying on the legacy MD5 default and prefer an explicitly configured stronger algorithm where supported."});
+        else if(a.find("sha-256")!=std::string::npos||a.find("sha-512-256")!=std::string::npos)r.findings.push_back({"PASS","Stronger Digest algorithm advertised","The authentication challenge advertises a SHA-2-class SIP Digest algorithm."});
         if(a.find("qop=")==std::string::npos)r.findings.push_back({"WARN","Digest qop missing","Digest challenge does not advertise qop; review authentication hardening."});
         if(a.find("realm=")==std::string::npos)r.findings.push_back({"WARN","Digest realm missing","Authentication challenge did not expose a realm parameter."});
     }else if(r.statusCode==403){r.findings.push_back({"INFO","Registration forbidden","Unauthenticated registration was rejected with 403."});}
@@ -470,9 +560,9 @@ std::vector<AuditResponse> PbxAudit::attackScenarioAudit(const std::string&host,
 }
 
 
-PbxFingerprint PbxAudit::fingerprint(const std::string&host,std::uint16_t port,AuditTransport transport,unsigned timeoutMs)
+PbxFingerprint PbxAudit::fingerprintFromProbe(const AuditResponse& probe)
 {
-    const auto probe=serviceProbe(host,port,transport,timeoutMs);PbxFingerprint fp;fp.host=host;fp.serverBanner=probe.server;fp.userAgentBanner=probe.userAgent;
+    PbxFingerprint fp;fp.host=probe.target;fp.serverBanner=probe.server;fp.userAgentBanner=probe.userAgent;
     const std::string banner=probe.server+" "+probe.userAgent;const auto lb=lower(banner);
     struct Sig{const char* needle;const char* vendor;const char* product;};
     static const Sig sigs[]={
@@ -495,6 +585,177 @@ PbxFingerprint PbxAudit::fingerprint(const std::string&host,std::uint16_t port,A
     return fp;
 }
 
+PbxFingerprint PbxAudit::fingerprint(const std::string&host,std::uint16_t port,AuditTransport transport,unsigned timeoutMs)
+{
+    return fingerprintFromProbe(serviceProbe(host,port,transport,timeoutMs));
+}
+
+AutomatedAuditResult PbxAudit::automatedAudit(const AutomatedAuditOptions& options,const AuditProgressCallback& progress)
+{
+    if(options.host.empty())throw std::runtime_error("automated audit requires a target host");
+    if(options.includeExtensionAudit){
+        if(options.extensionFirst>options.extensionLast)throw std::runtime_error("extension range start must be <= end");
+        if(options.extensionLast-options.extensionFirst+1>100)throw std::runtime_error("automated extension audit is capped at 100 entries");
+    }
+
+    AutomatedAuditResult result;result.options=options;
+    const unsigned total=7u+(options.includeParserAudit?1u:0u)+(options.includeResilienceAudit?1u:0u)+(options.includeTlsAudit?1u:0u)+(options.includeExtensionAudit?1u:0u)+(options.includeVulnerabilityLookup?1u:0u);
+    unsigned phase=0;
+    auto step=[&](const std::string& label){++phase;if(progress)progress(phase,total,label);};
+    auto append=[&](std::vector<AuditResponse> values){result.responses.insert(result.responses.end(),std::make_move_iterator(values.begin()),std::make_move_iterator(values.end()));};
+    auto posture=[&](std::string severity,std::string title,std::string detail){result.postureFindings.push_back({std::move(severity),std::move(title),std::move(detail)});};
+
+    step("Primary SIP service and capability probe");
+    auto primary=serviceProbe(options.host,options.port,options.transport,options.timeoutMs);
+    result.responses.push_back(primary);
+
+    step("Fingerprint from service-probe output");
+    result.fingerprint=fingerprintFromProbe(primary);
+    if(!result.fingerprint.version.empty())
+        posture("WARN","Detailed product/version disclosure","The target disclosed "+result.fingerprint.product+" "+result.fingerprint.version+" in unauthenticated SIP signaling. Minimize version banners where practical.");
+    else if(!primary.server.empty()||!primary.userAgent.empty())
+        posture("INFO","Product banner disclosure","Unauthenticated SIP signaling exposed a Server/User-Agent banner. Review whether this disclosure is necessary.");
+    const auto leakedPrivate=privateIpv4Addresses(primary.rawResponse);
+    if(!leakedPrivate.empty()&&!isPrivateIpv4(options.host)){
+        std::ostringstream leak;for(std::size_t i=0;i<leakedPrivate.size();++i){if(i)leak<<", ";leak<<leakedPrivate[i];}
+        posture("INFO","Private topology address disclosed","The unauthenticated SIP response exposed RFC1918 address(es): "+leak.str()+". If this is an Internet-facing SBC/PBX interface, review topology hiding and header normalization.");
+    }
+
+    step("SIP method-policy audit");
+    auto methods=methodAudit(options.host,options.port,options.transport,options.timeoutMs);append(std::move(methods));
+    const auto allow=lower(primary.allow);
+    std::vector<std::string> expanded;
+    for(const auto* method:{"refer","message","subscribe","publish","notify"})if(allow.find(method)!=std::string::npos)expanded.emplace_back(method);
+    if(!expanded.empty()){
+        std::ostringstream d;d<<"Advertised optional methods:";for(const auto&m:expanded)d<<" "<<m;
+        d<<". Disable methods that are not operationally required and enforce authentication/authorization on those that remain.";
+        posture("INFO","Expanded SIP method surface",d.str());
+    }
+
+    step("Authentication and Digest-oracle chain");
+    const std::string user=options.username.empty()?"sipher-audit":options.username;
+    auto auth=authenticationAudit(options.host,user,options.port,options.transport,options.timeoutMs);
+    result.responses.push_back(auth);
+    if(!options.username.empty()&&(auth.statusCode==401||auth.statusCode==407)){
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+        auto repeat=authenticationAudit(options.host,user,options.port,options.transport,options.timeoutMs);repeat.testName="Digest challenge repeat";
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+        auto control=authenticationAudit(options.host,"tm-invalid-"+token(10),options.port,options.transport,options.timeoutMs);control.testName="Digest invalid-account control";
+        const auto n1=authParam(auth.authenticate,"nonce"),n2=authParam(repeat.authenticate,"nonce");
+        if(!n1.empty()&&!n2.empty()){
+            if(n1==n2)repeat.findings.push_back({"WARN","Digest nonce reused","The first authentication-stage output and repeated challenge returned the same nonce. Review nonce lifetime and replay protections."});
+            else repeat.findings.push_back({"PASS","Digest nonce changed","The repeated challenge returned a different nonce from the pipeline's initial authentication stage."});
+        }
+        if(auth.statusCode!=control.statusCode)
+            control.findings.push_back({"WARN","Account-response oracle","The supplied test account and a random-invalid control received different SIP status codes ("+std::to_string(auth.statusCode)+" vs "+std::to_string(control.statusCode)+"). Normalize externally visible authentication failures where practical."});
+        else if(auth.statusCode)control.findings.push_back({"PASS","Consistent account response","The supplied test account and random-invalid control received the same SIP status code."});
+        result.responses.push_back(std::move(repeat));result.responses.push_back(std::move(control));
+    }else if(options.username.empty()){
+        posture("INFO","Digest oracle not run","No known test account was supplied, so account-differential checks were skipped rather than guessing usernames.");
+    }else{
+        posture("INFO","Digest oracle condition not met","The authentication stage did not return a Digest challenge, so the account-differential stage was not expanded.");
+    }
+
+    step("Standards and protocol-compliance checks");
+    append(complianceAudit(options.host,options.port,options.transport,options.timeoutMs));
+
+    step("Alternate cleartext SIP transport check");
+    const auto alternate=options.transport==AuditTransport::Udp?AuditTransport::Tcp:AuditTransport::Udp;
+    auto alt=serviceProbe(options.host,options.port,alternate,std::min(options.timeoutMs,1200u));
+    alt.testName="Alternate transport exposure probe";result.responses.push_back(alt);
+    if(primary.statusCode&&alt.statusCode)
+        posture("INFO","UDP and TCP SIP both reachable","The same SIP service responded over both cleartext UDP and TCP. Verify that both transports are required and equally protected by ACLs/rate limits.");
+    else if(primary.statusCode&&options.transport==AuditTransport::Udp&&!alt.statusCode)
+        posture("INFO","UDP-only cleartext exposure observed","The selected SIP service responded over UDP while the alternate TCP probe did not. Review UDP ACLs and anti-spoofing/rate controls.");
+
+    if(options.includeParserAudit){step("Bounded parser-normalization checks");append(parserAbuseAudit(options.host,options.port,options.transport,options.timeoutMs));}
+    if(options.includeResilienceAudit){step("Bounded rate/resilience checks");append(resilienceAudit(options.host,options.port,options.transport,6,200,std::min(options.timeoutMs,1100u)));}
+    if(options.includeExtensionAudit){step("Opt-in extension differential range");result.extensions=extensionAudit(options.host,options.extensionFirst,options.extensionLast,options.port,options.transport,250,std::min(options.timeoutMs,1200u));}
+
+    if(options.includeTlsAudit){
+        step("SIP TLS posture");
+        try{result.tlsSummary=tlsAudit(options.host,options.tlsPort,4000);}catch(const std::exception&e){result.tlsSummary=std::string("TLS audit unavailable: ")+e.what();}
+        const auto tlsLower=lower(result.tlsSummary);
+        if(tlsLower.find("tlsv1.3")!=std::string::npos||tlsLower.find("tlsv1.2")!=std::string::npos)
+            posture("PASS","Modern SIP TLS negotiated","The TLS helper reported TLS 1.2 or TLS 1.3 on the configured SIP-TLS port.");
+        else if(tlsLower.find("tlsv1.1")!=std::string::npos||tlsLower.find("tlsv1.0")!=std::string::npos||tlsLower.find("protocol version: tlsv1")!=std::string::npos)
+            posture("HIGH","Legacy TLS protocol observed","The SIP-TLS endpoint appears to negotiate TLS 1.0/1.1. Disable legacy protocol versions and require modern TLS where endpoint compatibility allows.");
+        else if(tlsLower.find("failed")!=std::string::npos||tlsLower.find("unavailable")!=std::string::npos||tlsLower.find("no tls")!=std::string::npos)
+            posture("WARN","SIP TLS not confirmed","The automated audit could not confirm a SIP-TLS handshake on port "+std::to_string(options.tlsPort)+". If signaling crosses untrusted networks, validate TLS availability and certificate policy.");
+        if(tlsLower.find("rc4")!=std::string::npos||tlsLower.find("3des")!=std::string::npos||tlsLower.find("des-cbc3")!=std::string::npos)
+            posture("HIGH","Legacy TLS cipher observed","The TLS handshake output references RC4/3DES-class ciphers. Remove legacy cipher suites.");
+        if(tlsLower.find("certificate verification exit code: 0")!=std::string::npos)
+            posture("PASS","SIP TLS certificate verified","The local OpenSSL trust and hostname/IP verification completed successfully for the configured SIP-TLS endpoint.");
+        else if(tlsLower.find("certificate verification exit code:")!=std::string::npos)
+            posture("WARN","SIP TLS certificate verification failed","The TLS endpoint negotiated, but the local trust/identity verification did not succeed. Review the certificate chain, trust anchor, SAN/hostname or IP identity, and expiration.");
+        if(tlsLower.find("certificate has expired")!=std::string::npos||tlsLower.find("certificate expired")!=std::string::npos)
+            posture("HIGH","Expired SIP TLS certificate observed","The OpenSSL verification output indicates an expired certificate. Replace it and confirm endpoints trust the renewed chain.");
+        if(tlsLower.find("hostname mismatch")!=std::string::npos||tlsLower.find("ip address mismatch")!=std::string::npos)
+            posture("WARN","SIP TLS identity mismatch","The certificate identity does not match the audited hostname/IP. Review SAN entries and endpoint certificate validation policy.");
+    }
+
+    if(options.includeVulnerabilityLookup){
+        step("Public CVE / Exploit-DB metadata correlation");
+        result.vulnerabilityReport=vulnerabilityLookupReport(result.fingerprint,12);
+        if(result.vulnerabilityReport.find("CVE-")!=std::string::npos)
+            posture("WARN","Public vulnerability metadata matched fingerprint","Public CVE metadata matched the remotely disclosed product/version. This is correlation, not proof of exploitability; verify the exact installed build and vendor advisories.");
+    }
+
+    step("Prioritize findings and remediation");
+    auto count=[&](const AuditFinding& f){const auto sev=lower(f.severity);if(sev=="high"||sev=="critical")++result.highCount;else if(sev=="warn"||sev=="warning"||sev=="medium")++result.warnCount;else if(sev=="pass")++result.passCount;else ++result.infoCount;};
+    for(const auto& r:result.responses){for(const auto& f:r.findings)count(f);}
+    for(const auto& f:result.postureFindings)count(f);
+    return result;
+}
+
+std::string AutomatedAuditResult::toText() const
+{
+    std::ostringstream o;
+    o<<"S.I.P.H.E.R. 1.0.0 r8 — AUTOMATED CHAINED PBX / SIP SECURITY AUDIT\n";
+    o<<PbxAudit::warningText()<<"\n\n";
+    o<<"Target: "<<options.host<<":"<<options.port<<"/"<<PbxAudit::transportName(options.transport)<<"\n";
+    if(!options.username.empty())o<<"Authorized test account: "<<options.username<<"\n";
+    o<<"Risk summary: "<<highCount<<" HIGH, "<<warnCount<<" WARN, "<<passCount<<" PASS, "<<infoCount<<" INFO\n";
+    o<<"Pipeline: service -> fingerprint -> methods -> authentication/oracle -> compliance -> alternate transport";
+    if(options.includeParserAudit)o<<" -> parser";
+    if(options.includeResilienceAudit)o<<" -> resilience";
+    if(options.includeExtensionAudit)o<<" -> extension range";
+    if(options.includeTlsAudit)o<<" -> TLS";
+    if(options.includeVulnerabilityLookup)o<<" -> CVE metadata";
+    o<<" -> prioritized report\n\n";
+
+    if(!postureFindings.empty()){
+        o<<"EXECUTIVE SECURITY POSTURE\n--------------------------\n";
+        for(const auto&f:postureFindings)o<<"["<<f.severity<<"] "<<f.title<<": "<<f.detail<<"\n";
+        o<<"\n";
+    }
+
+    o<<fingerprint.toText()<<"\n";
+    o<<"CHAINED PROBE DETAILS\n---------------------\n";
+    for(const auto&r:responses)o<<r.toText(false)<<"\n";
+
+    if(!extensions.empty()){
+        o<<"OPT-IN EXTENSION DIFFERENTIAL AUDIT\n-----------------------------------\n";
+        o<<"EXT       CODE  LATENCY   ASSESSMENT\n";
+        for(const auto&e:extensions)o<<std::setw(9)<<std::left<<e.extension<<std::setw(6)<<e.statusCode<<std::setw(10)<<std::fixed<<std::setprecision(1)<<e.latencyMs<<e.assessment<<"\n";
+        o<<"\n";
+    }
+    if(!tlsSummary.empty())o<<"TLS HANDSHAKE SUMMARY\n---------------------\n"<<tlsSummary<<"\n\n";
+    if(!vulnerabilityReport.empty())o<<vulnerabilityReport<<"\n";
+
+    std::set<std::string> remediations;
+    auto consider=[&](const AuditFinding&f){const auto title=lower(f.title);if(title.find("unauthenticated register")!=std::string::npos)remediations.insert("Require authentication and authorization for REGISTER; confirm SBC/PBX ACLs prevent untrusted registration attempts.");if(title.find("account-response oracle")!=std::string::npos)remediations.insert("Normalize externally visible authentication failures so valid and invalid accounts are harder to distinguish.");if(title.find("digest md5")!=std::string::npos)remediations.insert("Prefer stronger SIP Digest algorithms where supported and protect authentication exchanges with TLS.");if(title.find("large udp response")!=std::string::npos)remediations.insert("Rate-limit and ACL unauthenticated UDP SIP; apply anti-spoofing controls to reduce reflection/amplification risk.");if(title.find("parser edge accepted")!=std::string::npos||title.find("unknown sip method")!=std::string::npos)remediations.insert("Tighten SIP normalization and reject malformed/unknown protocol elements before they reach downstream systems.");if(title.find("version disclosure")!=std::string::npos||title.find("banner disclosure")!=std::string::npos)remediations.insert("Minimize unauthenticated Server/User-Agent version disclosure where operationally practical.");if(title.find("topology address")!=std::string::npos)remediations.insert("Review SBC topology hiding and SIP header normalization so private routing addresses are not unnecessarily disclosed to untrusted peers.");if(title.find("digest algorithm not declared")!=std::string::npos)remediations.insert("Explicitly configure a modern SIP Digest algorithm where endpoint interoperability allows instead of relying on a legacy default.");if(title.find("tls")!=std::string::npos)remediations.insert("Validate SIP-TLS on 5061, certificate trust/hostname policy, and modern TLS protocols/ciphers.");if(title.find("vulnerability metadata")!=std::string::npos)remediations.insert("Verify exact PBX/SBC/module versions against vendor advisories and patch unsupported or vulnerable builds.");};
+    for(const auto& r:responses){for(const auto& f:r.findings)consider(f);}
+    for(const auto& f:postureFindings)consider(f);
+    if(!remediations.empty()){
+        o<<"PRIORITIZED REMEDIATION NOTES\n----------------------------\n";
+        unsigned n=1;for(const auto&x:remediations)o<<n++<<". "<<x<<"\n";
+        o<<"\n";
+    }
+    o<<"Analyst note: warnings are engineering leads, not automatic proof of compromise or exploitability. Confirm findings against the actual PBX/SBC configuration, network policy, and vendor guidance.\n";
+    return o.str();
+}
+
 std::string PbxFingerprint::toText() const
 {
     std::ostringstream o;o<<"S.I.P.H.E.R. By GITSC — PBX / SIP FINGERPRINT\n"<<"Target: "<<host<<"\nProduct: "<<product<<"\n";
@@ -514,7 +775,6 @@ std::string PbxAudit::vulnerabilityLookupReport(const PbxFingerprint&fp,unsigned
     if(maxResults>25)maxResults=25;
     std::ostringstream o;o<<"PUBLIC VULNERABILITY CORRELATION\n"<<"No exploit code is executed. Results require analyst verification.\n\n";
     if(fp.product.empty()||fp.product.find("Unknown")!=std::string::npos){o<<"No recognized product fingerprint is available; CVE correlation skipped to avoid broad/noisy matching.\n";return o.str();}
-#ifndef _WIN32
     const std::string query=fp.product+(fp.version.empty()?std::string{}:" "+fp.version);
     const std::string url="https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch="+urlEncode(query)+"&resultsPerPage="+std::to_string(maxResults);
     std::vector<std::string> curl={"curl","-fsSL","--connect-timeout","6","--max-time","15","-A","S.I.P.H.E.R./1.0.0",url};
@@ -527,31 +787,32 @@ std::string PbxAudit::vulnerabilityLookupReport(const PbxFingerprint&fp,unsigned
     }else o<<" - NVD lookup unavailable (curl/API error). Check connectivity, rate limits, or NVD_API_KEY.\n";
 
     o<<"\nExploit-DB metadata — query: "<<query<<"\n";
-    const char*home=std::getenv("HOME");std::filesystem::path cache=(home&&*home)?std::filesystem::path(home)/".cache"/"sipher"/"files_exploits.csv":std::filesystem::temp_directory_path()/"sipher-files_exploits.csv";
+    const std::filesystem::path cache=runtime::stateDir()/"cache"/"files_exploits.csv";
     std::error_code ec;bool refresh=!std::filesystem::exists(cache,ec);if(!refresh){auto age=std::filesystem::file_time_type::clock::now()-std::filesystem::last_write_time(cache,ec);if(!ec&&age>std::chrono::hours(24*7))refresh=true;}
     if(refresh){std::filesystem::create_directories(cache.parent_path(),ec);const std::string tmp=cache.string()+".tmp";int rc=0;runProgramCapture({"curl","-fsSL","--connect-timeout","6","--max-time","30","-o",tmp,"https://gitlab.com/exploit-database/exploitdb/-/raw/main/files_exploits.csv"},35000,&rc);if(rc==0&&std::filesystem::exists(tmp)){std::filesystem::rename(tmp,cache,ec);if(ec){std::filesystem::remove(cache,ec);ec.clear();std::filesystem::rename(tmp,cache,ec);}}else std::filesystem::remove(tmp,ec);}
     std::ifstream csv(cache);const auto productNeedle=lower(fp.product),versionNeedle=lower(fp.version);shown=0;
     if(csv){std::string line;std::getline(csv,line);while(shown<maxResults&&std::getline(csv,line)){const auto ll=lower(line);if(ll.find(productNeedle)==std::string::npos)continue;if(!versionNeedle.empty()&&ll.find(versionNeedle)==std::string::npos)continue;const auto fields=csvFields(line);if(fields.size()<3)continue;o<<" - EDB-"<<fields[0]<<": "<<fields[2]<<" (https://www.exploit-db.com/exploits/"<<fields[0]<<")\n";++shown;}if(shown==0)o<<" - No matching Exploit-DB metadata entries found in the current cache.\n";}
     else o<<" - Exploit-DB metadata cache unavailable. curl is required to retrieve the official metadata index.\n";
     o<<"\nCorrelation note: banner/version matches are not proof that a CVE is exploitable on this host. Confirm exact package/module versions and vendor advisories before remediation or testing.\n";return o.str();
-#else
-    o<<"NVD/Exploit-DB correlation is currently implemented for Linux/FreeBSD builds.\n";return o.str();
-#endif
 }
 
 std::string PbxAudit::tlsAudit(const std::string&host,std::uint16_t port,unsigned timeoutMs)
 {
-#ifndef _WIN32
     if(host.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:_")!=std::string::npos)throw std::runtime_error("TLS audit host contains unsupported characters");
-    int pipefd[2];if(pipe(pipefd)!=0)throw std::runtime_error("pipe() failed: "+std::string(std::strerror(errno)));
-    posix_spawn_file_actions_t a;posix_spawn_file_actions_init(&a);posix_spawn_file_actions_addopen(&a,STDIN_FILENO,"/dev/null",O_RDONLY,0);posix_spawn_file_actions_adddup2(&a,pipefd[1],STDOUT_FILENO);posix_spawn_file_actions_adddup2(&a,pipefd[1],STDERR_FILENO);posix_spawn_file_actions_addclose(&a,pipefd[0]);
-    const std::string endpoint=host+":"+std::to_string(port);std::vector<std::string> args={"openssl","s_client","-connect",endpoint,"-servername",host,"-brief","-no_ign_eof"};std::vector<char*> argv;for(auto&s:args)argv.push_back(s.data());argv.push_back(nullptr);
-    pid_t pid=-1;int rc=posix_spawnp(&pid,"openssl",&a,nullptr,argv.data(),environ);posix_spawn_file_actions_destroy(&a);close(pipefd[1]);if(rc!=0){close(pipefd[0]);throw std::runtime_error("Unable to launch openssl: "+std::string(std::strerror(rc)));}
-    const auto start=std::chrono::steady_clock::now();int status=0;for(;;){const auto w=waitpid(pid,&status,WNOHANG);if(w==pid)break;if(w<0)break;if(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count()>timeoutMs){kill(pid,SIGTERM);std::this_thread::sleep_for(std::chrono::milliseconds(100));kill(pid,SIGKILL);waitpid(pid,&status,0);break;}std::this_thread::sleep_for(std::chrono::milliseconds(50));}
-    std::string out;std::array<char,4096>b{};for(;;){const auto n=read(pipefd[0],b.data(),b.size());if(n>0)out.append(b.data(),static_cast<std::size_t>(n));else break;}close(pipefd[0]);if(out.empty())out="No TLS handshake output received.";return out;
-#else
-    (void)host;(void)port;(void)timeoutMs;return "TLS audit is implemented for Unix builds.";
-#endif
+    const std::string endpoint=host+":"+std::to_string(port);
+    int rc=0;auto out=runProgramCapture({"openssl","s_client","-connect",endpoint,"-servername",host,"-brief","-no_ign_eof"},timeoutMs+2000,&rc);
+    if(out.empty()){
+        if(rc!=0)return "TLS audit helper unavailable or handshake failed. Portable Windows builds expect openssl.exe beside S.I.P.H.E.R. or on PATH.";
+        return "No TLS handshake output received.";
+    }
+    std::vector<std::string> verify={"openssl","s_client","-connect",endpoint,"-servername",host,"-brief","-verify_return_error","-no_ign_eof"};
+    if(looksLikeIpv4Literal(host)){verify.insert(verify.end()-1,"-verify_ip");verify.insert(verify.end()-1,host);}
+    else{verify.insert(verify.end()-1,"-verify_hostname");verify.insert(verify.end()-1,host);}
+    int verifyRc=0;const auto verified=runProgramCapture(verify,timeoutMs+2000,&verifyRc);
+    out+="\n--- Certificate trust / identity verification ---\n";
+    if(!verified.empty())out+=verified;else out+="No additional verification output received.\n";
+    out+="Certificate verification exit code: "+std::to_string(verifyRc)+"\n";
+    return out;
 }
 
 std::string AuditResponse::toText(bool includeRaw) const

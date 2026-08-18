@@ -2,7 +2,7 @@
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-BUILDER_REVISION="sipher-r7-20260818-auto-rtp-wireshark"
+BUILDER_REVISION="sipher-r8-20260818-chained-audit-pthread"
 
 # A shell can keep an old logical $PWD after a desktop file manager moves the
 # directory to Trash. Building from that relocated inode is especially unsafe
