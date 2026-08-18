@@ -1,0 +1,17 @@
+# S.I.P.H.E.R. SIP profile
+name=1
+sip_domain=1
+registrar=1
+username=1
+auth_username=1
+password=1
+display_name=1
+outbound_proxy=1
+caller_id_domain=1
+stun_server=
+transport=udp
+identity_mode=from
+local_sip_port=5060
+registration_expires=300
+use_ice=false
+enable_srtp=false
