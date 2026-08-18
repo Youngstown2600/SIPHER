@@ -1,0 +1,57 @@
+# S.I.P.H.E.R. Operator Guide
+
+S.I.P.H.E.R. 1.0 keeps the full TrunkMonkey 2.0 r20 engine but makes the terminal interface usable without memorizing commands.
+
+## Start here
+
+Run `sipher` after installation, or run the built binary from `build/all/` or `build/cli/`. The Main screen shows a numbered **Operator Menu**. Type a number and press Enter.
+
+| Choice | Workflow | Use it for |
+|---|---|---|
+| 1 | Place a call | Normal outbound test call with optional caller ID |
+| 2 | Manage active calls | Answer, hang up, hold/resume, foreground, mute, DTMF, report |
+| 3 | Queue / call-blast test | Single destination or list-based load tests, with optional WAV/MP3/etc. audio |
+| 4 | Call diagnostics & packet capture | RTP/media stats, SIP ladder, SIP/RTP/combined PCAP, report export |
+| 5 | PBX / SIP security audit | Authorized PBX discovery and bounded audit workflows |
+| 6 | Audio & registration | Show/select microphone and playback devices, registration history |
+| 7 | SIP account / profile | View, edit, or reload the SIP account |
+| 8 | Themes & display | Select any of the 16 retained CLI themes |
+| 9 | Logs & capture utilities | PJSIP engine log, capture status/interfaces, stop captures, SIP log |
+| 10 | Advanced commands | Complete original command reference |
+| 0 | Exit | Clean shutdown |
+
+Type `menu` at any time to reopen the guided menu. Advanced users can type the original commands directly at the same `select>` prompt.
+
+## Tier-1 call test workflow
+
+1. Confirm the registration panel says **REGISTERED**.
+2. Select **1 — Place a call** and enter the destination.
+3. Use **2 — Manage active calls** for hold, mute, DTMF, or hangup.
+4. Use **4 — Call diagnostics & packet capture** to review RTP quality or create a combined PCAP.
+5. Choose **Export diagnostic report** when escalation needs a text summary.
+
+For an RTP-only capture, Wireshark may need the `rtp_udp` heuristic enabled before **Telephony → RTP → RTP Streams** populates. A combined call PCAP includes signaling context and is generally easier to analyze.
+
+## When capture fails
+
+The normal builder configures capture permissions. Repair them without rebuilding:
+
+```sh
+./build.sh --configure-capture
+```
+
+Linux uses least-privilege capture capabilities. FreeBSD uses persistent BPF/devfs access. S.I.P.H.E.R. itself should run as the normal user.
+
+## When the wrong microphone is used
+
+Open **6 — Audio & registration** and list/select the PJSIP devices. For deeper host diagnostics:
+
+```sh
+./build.sh --audio-diagnose
+```
+
+The verified FreeBSD ALC236/VREF80 repair and automatic headset-microphone routing from the TrunkMonkey core are retained.
+
+## PBX audit safety
+
+PBX audit workflows are for systems you own or are explicitly authorized to test. Active probes can trigger IDS/IPS, alarms, rate limits, or PBX protection controls. The security-audit functions remain bounded and preserve the safety limits from TrunkMonkey 2.0 r20.

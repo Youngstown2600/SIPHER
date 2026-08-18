@@ -1,0 +1,24 @@
+# S.I.P.H.E.R. By GITSC 1.0 provider-neutral SIP profile
+# The builder creates ~/.config/trunkmonkey/profile.conf from this template
+# on first build and never overwrites an existing profile.
+name=Default
+sip_domain=
+registrar=
+username=
+auth_username=
+password=
+display_name=S.I.P.H.E.R.
+outbound_proxy=
+caller_id_domain=
+
+# udp | tcp | tls
+transport=udp
+local_sip_port=5060
+registration_expires=300
+
+# from | pai | rpid | from+pai
+identity_mode=from
+
+stun_server=
+use_ice=false
+enable_srtp=false

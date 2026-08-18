@@ -1,0 +1,8 @@
+build/
+*.log
+*.conf
+!examples/*.conf.example
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile

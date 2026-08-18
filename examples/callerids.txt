@@ -1,0 +1,5 @@
+# One provider/PBX-authorized identity per line.
+# Bare numbers or complete SIP URIs are accepted.
+3305552001
+3305552002
+3305552003

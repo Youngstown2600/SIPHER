@@ -1,0 +1,26 @@
+S.I.P.H.E.R. 1.0.0 — Linux / FreeBSD release
+
+Base core: TrunkMonkey 2.0.0 Unix r20
+
+No feature modules were removed. This repackaging keeps the full C++17/PJSUA2 core, Qt GUI, queue/blast engine, WAV/MP3/etc. audio injection, SIP/RTP/combined packet capture, RTP quality statistics, SIP ladder, call reports, registration history, independent audio-device selection, FreeBSD ALC236 headset routing/repair, Linux/FreeBSD capture permission setup, and the bounded PBX audit suite.
+
+Usability changes:
+- Default CLI Operator Mode with numbered guided workflows
+- Original advanced command mode retained in full
+- Guided call, call-control, queue, diagnostics, PBX-audit, audio, profile, theme, and log/capture workflows
+- Quoted path handling for audio files, PCAPs, reports, and list files with spaces
+- Operator menu visible on both wide and narrow terminals
+- S.I.P.H.E.R. By GITSC CLI/GUI branding with adaptive block-terminal logo
+- Installed executable names: sipher and sipher-gui
+- Existing trunkmonkey config/state/temp paths retained intentionally for profile/audio compatibility
+- All 26 CLI/GUI themes retained
+- Tier-1-oriented OPERATOR_GUIDE.md included
+
+Builder:
+  ./build.sh
+
+Supported targets:
+- Linux
+- FreeBSD
+
+The builder retains automatic dependency installation, managed PJSIP 2.17 validation/bootstrap, Qt 6 dependencies, ffmpeg support, Linux capture capabilities, FreeBSD BPF/devfs permissions, audio preflight, and recognized ALC236 repair.
