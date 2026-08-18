@@ -5,6 +5,7 @@
 #include "trunkmonkey/RuntimePaths.h"
 #include "trunkmonkey/SipAccount.h"
 #include "trunkmonkey/SipWireMonitor.h"
+#include "trunkmonkey/Version.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>

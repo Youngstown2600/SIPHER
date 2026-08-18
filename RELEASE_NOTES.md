@@ -1,6 +1,6 @@
-# S.I.P.H.E.R. 1.0.0 r5 — Rebrand
+# S.I.P.H.E.R. 1.0.0 r6 — Rebrand
 
-S.I.P.H.E.R. — **SIP Inspection, Protocol Handling, Enumeration & Recon** — By GITSC. This release renames S.a.K. while preserving the same SIP/RTP/PBX feature set, 26 themes, CLI/GUI workflows, and legacy TrunkMonkey configuration compatibility. Executables are now `sipher` and `sipher-gui`. The r5 branding refresh adds the supplied block-terminal S.I.P.H.E.R. logo to the CLI, an adaptive 80x25-style layout, a matching GUI banner/application icon, and a compact top-left CLI brand badge.
+S.I.P.H.E.R. — **SIP Inspection, Protocol Handling, Enumeration & Recon** — By GITSC. This release renames S.a.K. while preserving the same SIP/RTP/PBX feature set, 26 themes, CLI/GUI workflows, and legacy TrunkMonkey configuration compatibility. Executables are now `sipher` and `sipher-gui`. The r6 branding refresh adds the supplied block-terminal S.I.P.H.E.R. logo to the CLI, an adaptive 80x25-style layout, a matching GUI banner/application icon, and a compact top-left CLI brand badge.
 
 # S.I.P.H.E.R. 1.0.0 r4
 
@@ -242,3 +242,7 @@ The Unix release tests no longer use C/C++ `assert()` for validation. `RelWithDe
 - The PJSIP compatibility stamp is v9 so older local builds are rebuilt once with the r11 ABI/I/O-queue recipe.
 
 - r11: managed PJSIP now sets `PJ_IOQUEUE_MAX_HANDLES=256` for the 64-call compile-time ceiling and validates it before building S.I.P.H.E.R..
+
+## r6 build hotfix
+- Fixed Linux/FreeBSD full-build failure in `SipEngine.cpp` by explicitly including `trunkmonkey/Version.h` before using `SIPHER_USER_AGENT`.
+- No SIP/RTP behavior changed; this is a compile-time visibility fix only.
