@@ -1,11 +1,25 @@
+## r14 — FreeBSD automatic audio compatibility
+
+A normal FreeBSD CLI/GUI build now checks `snd_hda` before compiling. For a simple laptop codec with exactly one fixed Speaker and one headphone jack, r14 can safely test the FreeBSD-native Speaker/Headphones grouping automatically. The headphone is placed in the firmware Speaker association at `seq=15`; FreeBSD uses that sequence for headphone duplication and jack-triggered speaker auto-mute.
+
+Safeguards are built in: custom HDA hints are never overridden, PulseAudio is released only for the short HDA rebuild, playback/capture PCM availability is validated, failed changes are rolled back, and only a validated result is written to `/boot/device.hints` after a timestamped backup. Desktops with Line-out/multiple analog outputs are not retasked. Use `./build.sh --audio-diagnose` for a read-only report or `./build.sh --no-audio-fix ...` to opt out.
+
+## r13 — Change PBX dial prefix from Main
+
+**GUI:** Main → **Dial prefix**. Enter values such as `9` or `4071`; leave blank for none. No profile reload is required.
+
+**CLI:** the Main account panel shows the active prefix. Use `prefix 4071`, `prefix off`, or choose **Place a call** and edit the prefix at the prompt.
+
+The prefix applies only to plain dial strings. Explicit SIP URIs are left untouched.
+
 # S.I.P.H.E.R. Operator Guide
 
 
 ## PBX dial prefix
 
-If Asterisk/FreePBX requires access/routing digits before the called number, set `dial_prefix` in the SIP profile (GUI: **Settings → SIP Profile**; CLI: `profile-edit`). Example: with `dial_prefix=4071`, dialing `3306651498` sends the call to `sip:40713306651498@<PBX>`; PJSIP uses that prefixed destination for the outbound INVITE. Explicit `sip:`/`sips:` URIs and `user@domain` destinations are left unchanged.
+If Asterisk/FreePBX requires access/routing digits before the called number, edit **Dial prefix** directly on the GUI Main page or use `prefix <value>` in the CLI. The SIP profile's `dial_prefix` is only an optional startup default. Example: with the live prefix `4071`, dialing `3306651498` sends the call to `sip:40713306651498@<PBX>`. Use `prefix off` or leave the GUI field blank for no prefix. Explicit `sip:`/`sips:` URIs and `user@domain` destinations are left unchanged.
 
-The GUI Main page has a **Use configured dial prefix** checkbox for one-call bypass. SIP diagnostics label outbound messages **SENT →** and inbound messages **← RECEIVED** so you can verify the exact signaling S.I.P.H.E.R. transmitted.
+SIP diagnostics label outbound messages **SENT →** and inbound messages **← RECEIVED** so you can verify the exact signaling S.I.P.H.E.R. transmitted.
 S.I.P.H.E.R. 1.0 keeps the full TrunkMonkey 2.0 r20 engine but makes the terminal interface usable without memorizing commands.
 
 ## Start here

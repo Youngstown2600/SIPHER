@@ -1,3 +1,15 @@
+# r14 FreeBSD audio compatibility update — 2026-08-19
+
+S.I.P.H.E.R. r14 turns the FreeBSD speaker/headphone association fix into a conservative builder compatibility feature instead of a machine-specific troubleshooting step. During a normal FreeBSD CLI/GUI build, `build.sh` inspects `snd_hda` pin topology. If—and only if—the codec exposes a simple laptop pattern of one fixed Speaker and one jack Headphones output with no analog Line-out, r14 can test a corrected same-association layout with the headphone at sequence 15. The SIP application itself is not required for this check.
+
+The repair is guarded: existing user HDA hints cause an automatic skip; PulseAudio is temporarily stopped only when required for the HDA rebuild; playback/capture PCM availability is verified afterward; a failed validation is rolled back immediately; and persistence happens only after a successful runtime test. The persistent change is a generated `/boot/device.hints` headphone entry with a timestamped backup of the previous file. More complex audio hardware is reported but never retasked automatically. `./build.sh --audio-diagnose` remains read-only, and `--no-audio-fix` disables automatic repair during a normal build.
+
+r14 retains r13's main-screen per-PBX dial prefix and r12's Linux/FreeBSD live headset switching.
+
+# r13 Main-screen / per-PBX dial prefix update — 2026-08-19
+
+S.I.P.H.E.R. r13 treats the dial prefix as live PBX routing state instead of requiring a profile edit. The current prefix is editable on the GUI Main page and from the CLI Main workflow. Profiles can still provide an optional startup default, but changing PBXs no longer requires saving or reloading the SIP account.
+
 # r12 Linux + FreeBSD live audio hot-swap update — 2026-08-19
 
 S.I.P.H.E.R. r12 makes the r11 close/refresh/reopen/reattach audio lifecycle automatic on both supported Unix families. Linux follows PipeWire/PulseAudio route changes. FreeBSD uses PulseAudio route state when available and otherwise monitors native OSS/snd_hda default PCM, PCM inventory, and recording-source state. The SIP dialog and RTP session remain up while the local PJSIP hardware bridge is reopened and the foreground call is reattached.
@@ -117,7 +129,7 @@ The installed binary names are `sipher` and `sipher-gui`. Existing `~/.config/tr
 - Builder revision `unix-r13-20260816-audio-routing`: adds PJSIP audio device IDs/names to diagnostics, ignores commented HDA hints, detects multiple FreeBSD capture paths, and recognizes the verified ALC236 VREF80 headset-mic state.
 - SIP startup now enumerates/logs PJSIP audio devices and independently selects capture/playback. On FreeBSD, when exactly one capture-only device exists, S.I.P.H.E.R. prefers it so a dedicated headset mic is not silently replaced by the default internal mic.
 - Numeric runtime overrides are available through `S.I.P.H.E.R._CAPTURE_DEVICE` and `S.I.P.H.E.R._PLAYBACK_DEVICE`.
-- The r13 builder diagnostics were non-destructive; r14 adds only a narrowly signature-matched, backed-up ALC236 repair for the exact verified failure mode while leaving unknown hardware advisory-only.
+- Historical note: the 2026-08-16 `unix-r14` builder added the narrowly signature-matched ALC236 repair. The current 2026-08-19 r14 release additionally adds the guarded generic simple-laptop Speaker/Headphones compatibility pass described at the top of these notes.
 
 # S.I.P.H.E.R. 1.0 — Audio preflight / FreeBSD diagnostics — 2026-08-15
 

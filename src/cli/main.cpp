@@ -269,9 +269,10 @@ Call slash commands:
 
 Advanced Commands:
  status | calls | refresh
- profile-show | profile-edit | profile-reload    (profile includes optional dial_prefix)
- dial <dest> [cid]               configured dial_prefix is prepended to plain numbers
- dial-raw <dest> [cid]           bypass configured dial_prefix for this call
+ profile-show | profile-edit | profile-reload    (profile dial_prefix is only the startup default)
+ prefix [value|off]              show/change the current main-screen dial prefix without reloading profile
+ dial <dest> [cid]               current runtime prefix is prepended to plain numbers
+ dial-raw <dest> [cid]           bypass current runtime prefix for this call
  dial-preview <dest>             show exact Request-URI target before placing a call
  answer <id> | reject <id> [code] | hangup <id> | hangup-all
  foreground <id> | foreground-none
@@ -439,7 +440,7 @@ int askOperatorChoice(const std::string& title,const std::vector<std::string>& c
     }
 }
 
-std::string guidedOperatorWorkflow(CliDashboard& dashboard,const SipEngine& engine,int category)
+std::string guidedOperatorWorkflow(CliDashboard& dashboard,SipEngine& engine,int category)
 {
     dashboard.clear(std::cout);
     if(category==0){
@@ -463,14 +464,12 @@ std::string guidedOperatorWorkflow(CliDashboard& dashboard,const SipEngine& engi
         std::cout<<"\nPLACE A CALL\n------------\n";
         const auto destination=askOperator("Destination (number or SIP URI)");
         if(destination.empty()) return {};
+        auto prefix=askOperator("Dial prefix for this PBX (optional; '-' clears)",engine.dialPrefix());
+        if(prefix=="-" || prefix=="none" || prefix=="off") prefix.clear();
+        try{engine.setDialPrefix(prefix);}catch(const std::exception& e){std::cout<<"Invalid prefix: "<<e.what()<<"\n";return{};}
         const auto cid=askOperator("Caller ID (optional)");
-        bool usePrefix=!engine.profile().dialPrefix.empty();
-        if(!engine.profile().dialPrefix.empty()){
-            const auto answer=askOperator("Use PBX dial prefix '"+engine.profile().dialPrefix+"'? (Y/n)","Y");
-            usePrefix=!(answer=="n"||answer=="N"||answer=="no"||answer=="NO");
-            try{std::cout<<"Wire target: "<<engine.normalizeDestination(destination,usePrefix)<<"\n";}catch(...){}
-        }
-        return std::string(usePrefix?"dial ":"dial-raw ")+commandArg(destination)+(cid.empty()?std::string{}:" "+commandArg(cid));
+        try{std::cout<<"Wire target: "<<engine.normalizeDestination(destination,true)<<"\n";}catch(...){}
+        return std::string("dial ")+commandArg(destination)+(cid.empty()?std::string{}:" "+commandArg(cid));
     }
 
     if(category==2){
@@ -768,6 +767,7 @@ int main(int argc,char** argv)
         DashboardState state;
         state.profile=engine.profile();
         state.profilePath=profilePath.string();
+        state.dialPrefix=engine.dialPrefix();
         state.page=currentPage;
         state.registrationText=engine.registrationText();
         state.registered=engine.registered();
@@ -888,7 +888,7 @@ int main(int argc,char** argv)
                     try{
                         engine.stop();
                         engine.start(ProfileStore::load(profilePath.string()),kMaxCalls);
-                        addNotice("SIP profile saved and reloaded.",DashboardNotice::Level::Success);
+                        addNotice("SIP profile saved and reloaded; dial prefix reset to profile default.",DashboardNotice::Level::Success);
                     }catch(...){
                         ProfileStore::save(oldProfile,profilePath.string());
                         try{engine.stop();engine.start(oldProfile,kMaxCalls);}catch(...){}
@@ -903,7 +903,7 @@ int main(int argc,char** argv)
                     const auto updated=ProfileStore::load(profilePath.string());
                     engine.stop();
                     engine.start(updated,kMaxCalls);
-                    addNotice("SIP profile reloaded.",DashboardNotice::Level::Success);
+                    addNotice("SIP profile reloaded; dial prefix reset to profile default.",DashboardNotice::Level::Success);
                 }catch(...){
                     try{engine.stop();engine.start(oldProfile,kMaxCalls);}catch(...){}
                     throw;
@@ -916,13 +916,23 @@ int main(int argc,char** argv)
                 const auto effective=engine.normalizeDestination(destination,applyPrefix);
                 focusCallId=engine.makeCall(destination,callerId,true,CallPurpose::Phone,applyPrefix);
                 addNotice("Outgoing call started: ID "+std::to_string(focusCallId)+" -> "+effective+(applyPrefix?"":" (prefix bypassed)"),DashboardNotice::Level::Success);
+            }else if(cmd=="prefix"){
+                auto value=readArg(in);
+                if(value.empty()){
+                    dashboard.showOverlay("DIAL PREFIX","Current dial prefix: "+(engine.dialPrefix().empty()?std::string("<none>"):engine.dialPrefix())+"\nChange with: prefix 4071\nClear with: prefix off\n",std::cout);dashboard.pauseForEnter(std::cin,std::cout);
+                }else{
+                    if(value=="off"||value=="none"||value=="-")value.clear();
+                    engine.setDialPrefix(value);
+                    addNotice("Current dial prefix: "+(engine.dialPrefix().empty()?std::string("<none>"):engine.dialPrefix()),DashboardNotice::Level::Success);
+                }
             }else if(cmd=="dial-preview"){
                 const auto destination=readArg(in);
                 if(destination.empty()) throw std::runtime_error("destination required");
                 const auto effective=engine.normalizeDestination(destination,true);
                 std::ostringstream out;
                 out<<"Entered destination: "<<destination<<"\n"
-                   <<"Configured PBX prefix: "<<(engine.profile().dialPrefix.empty()?"<none>":engine.profile().dialPrefix)<<"\n"
+                   <<"Current dial prefix: "<<(engine.dialPrefix().empty()?"<none>":engine.dialPrefix())<<"\n"
+                   <<"Profile startup default: "<<(engine.profile().dialPrefix.empty()?"<none>":engine.profile().dialPrefix)<<"\n"
                    <<"SIP Request-URI target: "<<effective<<"\n";
                 dashboard.showOverlay("DIAL PREVIEW",out.str(),std::cout);dashboard.pauseForEnter(std::cin,std::cout);
             }else if(cmd=="answer"){

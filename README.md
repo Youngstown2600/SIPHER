@@ -1,3 +1,13 @@
+## r14 FreeBSD audio compatibility
+
+On FreeBSD, a normal CLI/GUI build now performs a conservative `snd_hda` compatibility pass before compilation. r14 discovers the machine's own HDA pins; it does **not** hardcode Project-2501 NIDs. A layout is eligible for automatic correction only when one HDA function group has exactly one fixed `Speaker` pin, exactly one jack `Headphones` pin, and no analog `Line-out`. The builder keeps the firmware Speaker association and tests the headphone in that same association at `seq=15`, which is FreeBSD's special headphone duplicate/auto-mute sequence.
+
+The builder refuses to override existing user HDA pin hints, temporarily releases PulseAudio if needed, validates that playback and capture PCM devices still exist after `snd_hda` reconfiguration, rolls back a failed test, and persists only a validated fix with a `/boot/device.hints` backup. Complex desktop/multi-output layouts remain untouched. Use `./build.sh --audio-diagnose` for read-only inspection or `--no-audio-fix` to build without applying recognized repairs.
+
+## r13 per-PBX dial prefix on Main
+
+The dial prefix is now a live session setting. In the GUI, edit **Dial prefix** directly on Main before calling. In the CLI, use `prefix <value>`, `prefix off`, or simply choose **Place a call** and edit the prefix when prompted. The profile value is only a startup default.
+
 # S.I.P.H.E.R. 1.0.0 — Linux / FreeBSD
 
 ## r12 live headset/device switching
@@ -46,7 +56,7 @@ The existing runtime/config directories are intentionally retained for compatibi
 ./build.sh
 ```
 
-The builder retains Linux and FreeBSD dependency checks, PJSIP 2.17 bootstrap/validation, Qt 6 GUI dependencies, ffmpeg audio-file support, Linux capture capabilities, FreeBSD BPF/devfs capture permissions, and the verified ALC236 headset-mic diagnostic/repair path.
+The builder retains Linux and FreeBSD dependency checks, PJSIP 2.17 bootstrap/validation, Qt 6 GUI dependencies, ffmpeg audio-file support, Linux capture capabilities, FreeBSD BPF/devfs capture permissions, the r14 conservative laptop Speaker/Headphones compatibility pass, and the narrowly verified ALC236 headset-mic repair path.
 
 ---
 
@@ -95,11 +105,11 @@ The normal builder performs dependency checks, audio preflight, recognized safe 
 
 S.I.P.H.E.R. now enumerates PJSIP audio devices at SIP startup and treats capture and playback as separate routes. On FreeBSD, if PortAudio exposes exactly one capture-only endpoint alongside the normal default duplex device, S.I.P.H.E.R. prefers that dedicated capture endpoint for the microphone while leaving playback on the PJSIP/system default. This addresses laptop layouts where `pcm0` is the internal play/record device and a headset microphone appears separately as a record-only device. Set `S.I.P.H.E.R._CAPTURE_DEVICE=<id>` or `S.I.P.H.E.R._PLAYBACK_DEVICE=<id>` to override the numeric PJSIP device IDs for testing.
 
-`./build.sh --audio-diagnose` now reports PJSIP device IDs/names when the managed PJSIP is already installed, ignores commented-out HDA hints, warns about multiple FreeBSD capture paths, and recognizes the verified ALC236 VREF80 (`0x24`) jack-mic state. Diagnostics remain advisory. During a normal r14 build, the builder may apply only the exact verified ALC236 headset-mic repair signature after backing up affected system files; unknown hardware is never rewritten automatically.
+`./build.sh --audio-diagnose` now reports PJSIP device IDs/names when the managed PJSIP is already installed, ignores commented-out HDA hints, warns about multiple FreeBSD capture paths, and recognizes the verified ALC236 VREF80 (`0x24`) jack-mic state. Diagnostics remain advisory. During a normal r14 FreeBSD build, the builder may also test the conservative single-Speaker/single-Headphones association repair described above; complex or custom-hinted layouts are never rewritten automatically. The exact verified ALC236 headset-mic repair remains a separate narrowly fingerprinted path.
 
 ### Audio-preflight foundation — 2026-08-15
 
-S.I.P.H.E.R. 1.0 adds a non-destructive audio preflight to `build.sh`. Every CLI/GUI build inspects host playback/capture availability before compiling, and `./build.sh --audio-diagnose` can run the same check by itself. On FreeBSD it reports `/dev/sndstat` topology, the default PCM unit, `snd_hda` association errors, runtime HDA pin overrides versus codec originals, persistent `/boot/device.hints`/loader pin overrides, detected codecs, and PulseAudio defaults when available. The diagnostic command never rewrites HDA pins or mixer settings. The normal 2.0.0 builder only auto-repairs the narrowly verified ALC236 signature described above. The PJSIP static-link validation probe also enumerates PJSIP audio devices and warns when PJSIP sees no capture or playback device, including the `PJMEDIA_EAUD_NODEFDEV` risk.
+S.I.P.H.E.R. 1.0 adds a non-destructive audio preflight to `build.sh`. Every CLI/GUI build inspects host playback/capture availability before compiling, and `./build.sh --audio-diagnose` can run the same check by itself. On FreeBSD it reports `/dev/sndstat` topology, the default PCM unit, `snd_hda` association errors, runtime HDA pin overrides versus codec originals, persistent `/boot/device.hints`/loader pin overrides, detected codecs, and PulseAudio defaults when available. The diagnostic command never rewrites HDA pins or mixer settings. Normal r14 builds may apply only recognized guarded repairs: the conservative simple-laptop Speaker/Headphones association fix and the narrowly fingerprinted ALC236 headset-mic fix. The PJSIP static-link validation probe also enumerates PJSIP audio devices and warns when PJSIP sees no capture or playback device, including the `PJMEDIA_EAUD_NODEFDEV` risk.
 
 
 - Provider-neutral SIP REGISTER with digest authentication.

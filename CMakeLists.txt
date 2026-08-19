@@ -37,7 +37,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
  if(NOT _tm_stdcxx_pos EQUAL -1)
   message(FATAL_ERROR
    "FreeBSD PJSIP advertises libstdc++, but TrunkMonkey and packaged Qt use base Clang/libc++. "
-   "Rebuild PJSIP with ./build.sh --pjsip using the r12+ builder.")
+   "Rebuild PJSIP with ./build.sh --pjsip using the r14+ builder.")
  endif()
  string(FIND " ${_tm_pj_static_flags} " " -lc++ " _tm_libcxx_pos)
  if(_tm_libcxx_pos EQUAL -1)

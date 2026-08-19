@@ -1,6 +1,18 @@
-S.I.P.H.E.R. 1.0.0 r12 — Linux / FreeBSD live audio hot-swap release
+S.I.P.H.E.R. 1.0.0 r14 — FreeBSD audio compatibility + main-screen dial prefix + live audio hot-swap release
 
-Base: r11 audio lifecycle + r10 dial-prefix/SIP-capture updates
+Base: r13 main-screen prefix + r12 live audio hot-swap + r11 audio lifecycle + r10 SIP-capture updates
+
+r14 additions:
+- Generic FreeBSD `snd_hda` laptop Speaker/Headphones compatibility detection; no hardcoded NIDs.
+- Auto-fix only for exactly one fixed Speaker + one jack Headphones + no analog Line-out.
+- Firmware Speaker association retained; Headphones moved to the same association at `seq=15`.
+- Existing custom HDA hints cause a safe skip.
+- Runtime HDA rebuild is validated for playback/capture and rolled back on regression.
+- Successful repairs are persisted to `/boot/device.hints` after timestamped backup.
+- New detector fixture tests: `tests/freebsd_audio_compat_test.sh`.
+
+r13 additions:
+- Main-screen/session dial prefix for GUI and CLI; profile prefix is startup default only.
 
 r12 additions:
 - Automatic headset/system-audio following on Linux and FreeBSD.
@@ -25,4 +37,4 @@ Supported targets:
 - Linux
 - FreeBSD
 
-The builder retains automatic dependency installation, managed PJSIP 2.17 validation/bootstrap, Qt 6 dependencies, ffmpeg support, Linux capture capabilities, FreeBSD BPF/devfs permissions, audio preflight, and recognized ALC236 repair.
+The builder retains automatic dependency installation, managed PJSIP 2.17 validation/bootstrap, Qt 6 dependencies, ffmpeg support, Linux capture capabilities, FreeBSD BPF/devfs permissions, audio preflight, r14's guarded generic laptop HDA compatibility pass, and the narrowly recognized ALC236 repair.

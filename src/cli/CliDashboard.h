@@ -21,6 +21,7 @@ struct DashboardNotice {
 struct DashboardState {
     SipProfile profile;
     std::string profilePath;
+    std::string dialPrefix;
     std::string registrationText;
     bool registered{false};
     unsigned maxCalls{50};

@@ -2,7 +2,7 @@
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-BUILDER_REVISION="sipher-r12-20260819-linux-freebsd-audio-hotswap"
+BUILDER_REVISION="sipher-r14-20260819-freebsd-audio-compat"
 
 # A shell can keep an old logical $PWD after a desktop file manager moves the
 # directory to Trash. Building from that relocated inode is especially unsafe
@@ -509,7 +509,7 @@ audio_info() {
 run_audio_preflight() {
   echo
   echo "============================================================"
-  echo " TRUNKMONKEY AUDIO PREFLIGHT"
+  echo " S.I.P.H.E.R. AUDIO PREFLIGHT"
   echo "============================================================"
   echo "This check never rewrites mixer settings, HDA pin mappings, loader hints,"
   echo "or PulseAudio/PipeWire configuration. It only reports potential problems."
@@ -543,9 +543,9 @@ run_audio_preflight() {
       [ -n "$recsrc" ] && audio_info "FreeBSD active recording source(s): $recsrc"
     fi
     if command -v pactl >/dev/null 2>&1 && pactl info >/dev/null 2>&1; then
-      audio_info "PulseAudio compatibility detected on FreeBSD; r12 will use it as the preferred live route-change watcher."
+      audio_info "PulseAudio compatibility detected on FreeBSD; r14 will use it as the preferred live route-change watcher."
     else
-      audio_info "r12 will use native FreeBSD OSS/snd_hda state for automatic audio recovery."
+      audio_info "r14 will use native FreeBSD OSS/snd_hda state for automatic audio recovery."
     fi
 
     if [ -n "${sndstat_out:-}" ]; then
@@ -593,6 +593,28 @@ run_audio_preflight() {
     if [ -n "$boot_hints" ]; then
       audio_warn "Persistent HDA pin overrides were found (review if capture/playback associations look wrong):"
       printf '%s\n' "$boot_hints" | sed 's/^/         /'
+    fi
+
+    hda_detector="$ROOT_DIR/scripts/freebsd-hda-output-detect.awk"
+    if [ -r "$hda_detector" ]; then
+      hda_dump=$(mktemp "${TMPDIR:-/tmp}/sipher-r14-preflight-hda.XXXXXX")
+      sysctl -a 2>/dev/null > "$hda_dump" || true
+      hda_candidates=$(awk -f "$hda_detector" "$hda_dump" 2>/dev/null || true)
+      rm -f "$hda_dump"
+      if [ -n "$hda_candidates" ]; then
+        old_ifs=$IFS
+        tab=$(printf '\t')
+        printf '%s\n' "$hda_candidates" | while IFS="$tab" read -r au spnid target sas ssq hpnid has hsq osas ossq ohas ohsq; do
+          [ -n "$au" ] || continue
+          if [ "$sas" = "$target" ] && [ "$ssq" = 0 ] && [ "$has" = "$target" ] && [ "$hsq" = 15 ]; then
+            audio_info "hdaa${au}: simple laptop Speaker nid${spnid} + Headphones nid${hpnid} already share as=${target}; headphone seq=15 is active."
+          else
+            audio_warn "hdaa${au}: simple laptop Speaker/Headphones pins are split or missing headphone seq=15 (Speaker as=${sas}/seq=${ssq}, Headphones as=${has}/seq=${hsq})."
+            audio_info "r14 normal builds can test a conservative repair using firmware Speaker association ${target}; --audio-diagnose remains read-only."
+          fi
+        done
+        IFS=$old_ifs
+      fi
     fi
 
     if printf '%s\n' "$codec_desc" | grep -qi 'ALC236'; then
@@ -649,8 +671,241 @@ run_audio_preflight() {
 }
 
 
+
+freebsd_audio_pcm_counts() {
+  if [ ! -r /dev/sndstat ]; then
+    echo "0 0"
+    return 0
+  fi
+  _fa_snd=$(cat /dev/sndstat 2>/dev/null || true)
+  _fa_play=$(printf '%s\n' "$_fa_snd" | grep '^pcm[0-9][0-9]*:' | grep -Ec '\((play|play/rec)\)' || true)
+  _fa_rec=$(printf '%s\n' "$_fa_snd" | grep '^pcm[0-9][0-9]*:' | grep -Ec '\((rec|play/rec)\)' || true)
+  case "$_fa_play" in ''|*[!0-9]*) _fa_play=0 ;; esac
+  case "$_fa_rec" in ''|*[!0-9]*) _fa_rec=0 ;; esac
+  echo "$_fa_play $_fa_rec"
+}
+
+freebsd_pause_pulseaudio_for_hda() {
+  FREEBSD_PULSE_RESTART=0
+  command -v pactl >/dev/null 2>&1 || return 0
+  pactl info >/dev/null 2>&1 || return 0
+  _fa_server=$(pactl info 2>/dev/null | sed -n 's/^Server Name:[[:space:]]*//p' | head -1)
+  case "$_fa_server" in
+    pulseaudio|PulseAudio|*pulseaudio*)
+      if command -v pulseaudio >/dev/null 2>&1; then
+        FREEBSD_PULSE_RESTART=1
+        audio_info "Temporarily stopping the user PulseAudio daemon so snd_hda can rebuild PCM devices safely."
+        pulseaudio -k >/dev/null 2>&1 || true
+        sleep 1
+      fi
+      ;;
+  esac
+}
+
+freebsd_resume_pulseaudio_after_hda() {
+  [ "${FREEBSD_PULSE_RESTART:-0}" -eq 1 ] || return 0
+  if command -v pulseaudio >/dev/null 2>&1; then
+    pulseaudio --start >/dev/null 2>&1 || audio_warn "PulseAudio did not restart automatically; start it with: pulseaudio --start"
+  fi
+  FREEBSD_PULSE_RESTART=0
+}
+
+freebsd_hda_hint_identity() {
+  _fa_unit=$1
+  _fa_hdacc=$(sysctl -n "dev.hdaa.${_fa_unit}.%parent" 2>/dev/null || true)
+  case "$_fa_hdacc" in hdacc[0-9]*) ;; *) return 1 ;; esac
+  _fa_hdacc_num=${_fa_hdacc#hdacc}
+  _fa_hdac=$(sysctl -n "dev.hdacc.${_fa_hdacc_num}.%parent" 2>/dev/null || true)
+  case "$_fa_hdac" in hdac[0-9]*) ;; *) return 1 ;; esac
+  _fa_hdac_num=${_fa_hdac#hdac}
+  _fa_loc=$(sysctl -n "dev.hdacc.${_fa_hdacc_num}.%location" 2>/dev/null || true)
+  _fa_cad=$(printf '%s\n' "$_fa_loc" | sed -n 's/.*cad=\([0-9][0-9]*\).*/\1/p')
+  [ -n "$_fa_cad" ] || return 1
+  echo "$_fa_hdac_num $_fa_cad"
+}
+
+freebsd_hda_has_custom_hint() {
+  _fa_hdac=$1
+  _fa_cad=$2
+  _fa_hdaa=$3
+  _fa_nid=$4
+  for _fa_hint_file in /boot/device.hints /boot/loader.conf /boot/loader.conf.local; do
+    [ -r "$_fa_hint_file" ] || continue
+    grep -Eq "^[[:space:]]*hint\\.hdac\\.${_fa_hdac}\\.cad${_fa_cad}\\.nid${_fa_nid}\\.config=" "$_fa_hint_file" && return 0
+    grep -Eq "^[[:space:]]*hint\\.hdaa\\.${_fa_hdaa}\\.nid${_fa_nid}\\.config=" "$_fa_hint_file" && return 0
+  done
+  return 1
+}
+
+freebsd_persist_headphone_hint() {
+  _fa_hdaa=$1
+  _fa_hdac=$2
+  _fa_cad=$3
+  _fa_hp_nid=$4
+  _fa_target_as=$5
+  _fa_marker_begin="# BEGIN SIPHER R14 FREEBSD AUDIO hdaa${_fa_hdaa}"
+  _fa_marker_end="# END SIPHER R14 FREEBSD AUDIO hdaa${_fa_hdaa}"
+
+  prepare_privileges_for "persistent FreeBSD snd_hda headphone compatibility"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "  [dry-run] back up /boot/device.hints"
+    echo "  [dry-run] persist hint.hdac.${_fa_hdac}.cad${_fa_cad}.nid${_fa_hp_nid}.config=\"as=${_fa_target_as} seq=15 device=Headphones\""
+    return 0
+  fi
+
+  _fa_stamp=$(date +%Y%m%d-%H%M%S)
+  if [ -e /boot/device.hints ]; then
+    run_privileged cp -p /boot/device.hints "/boot/device.hints.sipher-r14-backup-${_fa_stamp}"
+  fi
+
+  _fa_tmp=$(mktemp "${TMPDIR:-/tmp}/sipher-r14-device.hints.XXXXXX")
+  if [ -r /boot/device.hints ]; then
+    awk -v begin="$_fa_marker_begin" -v end="$_fa_marker_end" '
+      $0 == begin {skip=1; next}
+      $0 == end {skip=0; next}
+      !skip {print}
+    ' /boot/device.hints > "$_fa_tmp"
+  fi
+  {
+    echo ""
+    echo "$_fa_marker_begin"
+    echo "# Auto-detected simple laptop Speaker + Headphones layout."
+    echo "# seq=15 makes the headphone pin duplicate/auto-mute the first output in the association."
+    echo "hint.hdac.${_fa_hdac}.cad${_fa_cad}.nid${_fa_hp_nid}.config=\"as=${_fa_target_as} seq=15 device=Headphones\""
+    echo "$_fa_marker_end"
+  } >> "$_fa_tmp"
+  run_privileged install -m 0644 "$_fa_tmp" /boot/device.hints
+  rm -f "$_fa_tmp"
+  audio_info "Persisted FreeBSD headphone auto-switch hint; backup: /boot/device.hints.sipher-r14-backup-${_fa_stamp}"
+}
+
+configure_freebsd_hda_output_compat() {
+  [ "$OS_FAMILY" = freebsd ] || return 0
+  _fa_detector="$ROOT_DIR/scripts/freebsd-hda-output-detect.awk"
+  [ -r "$_fa_detector" ] || { audio_warn "FreeBSD HDA compatibility detector is missing: $_fa_detector"; return 0; }
+
+  _fa_dump=$(mktemp "${TMPDIR:-/tmp}/sipher-r14-hda.XXXXXX")
+  _fa_candidates_file=$(mktemp "${TMPDIR:-/tmp}/sipher-r14-hda-candidates.XXXXXX")
+  sysctl -a 2>/dev/null > "$_fa_dump" || { rm -f "$_fa_dump" "$_fa_candidates_file"; return 0; }
+  awk -f "$_fa_detector" "$_fa_dump" > "$_fa_candidates_file" 2>/dev/null || true
+  rm -f "$_fa_dump"
+  [ -s "$_fa_candidates_file" ] || {
+    rm -f "$_fa_candidates_file"
+    audio_info "No high-confidence simple FreeBSD laptop Speaker/Headphones association repair is needed."
+    return 0
+  }
+
+  _fa_tab=$(printf '\t')
+  while IFS="$_fa_tab" read -r _fa_unit _fa_spnid _fa_target _fa_sp_as _fa_sp_seq _fa_hpnid _fa_hp_as _fa_hp_seq _fa_osp_as _fa_osp_seq _fa_ohp_as _fa_ohp_seq; do
+    [ -n "$_fa_unit" ] || continue
+
+    _fa_ident=$(freebsd_hda_hint_identity "$_fa_unit" 2>/dev/null || true)
+    if [ -z "$_fa_ident" ]; then
+      audio_warn "hdaa${_fa_unit}: simple Speaker/Headphones mismatch detected, but hdac/cad identity could not be resolved; leaving it unchanged."
+      continue
+    fi
+    set -- $_fa_ident
+    _fa_hdac=$1
+    _fa_cad=$2
+
+    _fa_managed=0
+    if [ -r /boot/device.hints ] && grep -Fq "# BEGIN SIPHER R14 FREEBSD AUDIO hdaa${_fa_unit}" /boot/device.hints; then
+      _fa_managed=1
+    fi
+    if [ "$_fa_managed" -eq 0 ]; then
+      if freebsd_hda_has_custom_hint "$_fa_hdac" "$_fa_cad" "$_fa_unit" "$_fa_spnid" || \
+         freebsd_hda_has_custom_hint "$_fa_hdac" "$_fa_cad" "$_fa_unit" "$_fa_hpnid"; then
+        audio_warn "hdaa${_fa_unit}: existing user HDA pin hint found for Speaker/Headphones; r14 will not override custom audio policy."
+        continue
+      fi
+    fi
+
+    _fa_need_runtime=0
+    [ "$_fa_sp_as" = "$_fa_target" ] && [ "$_fa_sp_seq" = 0 ] || _fa_need_runtime=1
+    [ "$_fa_hp_as" = "$_fa_target" ] && [ "$_fa_hp_seq" = 15 ] || _fa_need_runtime=1
+
+    _fa_need_persist=0
+    [ "$_fa_ohp_as" = "$_fa_target" ] && [ "$_fa_ohp_seq" = 15 ] || _fa_need_persist=1
+    [ "$_fa_managed" -eq 1 ] && _fa_need_persist=0
+
+    if [ "$_fa_need_runtime" -eq 0 ] && [ "$_fa_need_persist" -eq 0 ]; then
+      audio_info "hdaa${_fa_unit}: Speaker nid${_fa_spnid} + Headphones nid${_fa_hpnid} already use association ${_fa_target} with headphone seq=15."
+      continue
+    fi
+
+    echo
+    echo "==> FreeBSD laptop audio compatibility: hdaa${_fa_unit}"
+    echo "    Speaker:    nid${_fa_spnid} current as=${_fa_sp_as} seq=${_fa_sp_seq}; firmware target as=${_fa_target} seq=0"
+    echo "    Headphones: nid${_fa_hpnid} current as=${_fa_hp_as} seq=${_fa_hp_seq}; target as=${_fa_target} seq=15"
+    echo "    Layout qualifies for unattended repair: exactly one fixed Speaker + one jack Headphones, no Line-out."
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+      echo "  [dry-run] temporarily rebuild hdaa${_fa_unit} with Speaker as=${_fa_target}/seq=0 and Headphones as=${_fa_target}/seq=15"
+      echo "  [dry-run] validate playback/capture PCM availability and roll back on regression"
+      if [ "$_fa_need_persist" -eq 1 ]; then
+        freebsd_persist_headphone_hint "$_fa_unit" "$_fa_hdac" "$_fa_cad" "$_fa_hpnid" "$_fa_target" || true
+      fi
+      continue
+    fi
+
+    if ! prepare_privileges_for "FreeBSD snd_hda laptop speaker/headphone compatibility"; then
+      audio_warn "hdaa${_fa_unit}: root access unavailable; skipping automatic audio repair. Re-run with privileges available or use --no-audio-fix."
+      continue
+    fi
+    set -- $(freebsd_audio_pcm_counts)
+    _fa_pre_play=$1
+    _fa_pre_rec=$2
+
+    freebsd_pause_pulseaudio_for_hda
+
+    _fa_apply_ok=1
+    run_privileged sysctl "dev.hdaa.${_fa_unit}.nid${_fa_spnid}_config=as=${_fa_target} seq=0" >/dev/null 2>&1 || _fa_apply_ok=0
+    run_privileged sysctl "dev.hdaa.${_fa_unit}.nid${_fa_hpnid}_config=as=${_fa_target} seq=15" >/dev/null 2>&1 || _fa_apply_ok=0
+    run_privileged sysctl "dev.hdaa.${_fa_unit}.reconfig=1" >/dev/null 2>&1 || _fa_apply_ok=0
+    sleep 1
+
+    _fa_sp_now=$(sysctl -n "dev.hdaa.${_fa_unit}.nid${_fa_spnid}_config" 2>/dev/null || true)
+    _fa_hp_now=$(sysctl -n "dev.hdaa.${_fa_unit}.nid${_fa_hpnid}_config" 2>/dev/null || true)
+    case "$_fa_sp_now" in *"as=${_fa_target} seq=0 device=Speaker"*) ;; *) _fa_apply_ok=0 ;; esac
+    case "$_fa_hp_now" in *"as=${_fa_target} seq=15 device=Headphones"*) ;; *) _fa_apply_ok=0 ;; esac
+
+    set -- $(freebsd_audio_pcm_counts)
+    _fa_post_play=$1
+    _fa_post_rec=$2
+    [ "$_fa_post_play" -gt 0 ] || _fa_apply_ok=0
+    if [ "$_fa_pre_rec" -gt 0 ] && [ "$_fa_post_rec" -eq 0 ]; then _fa_apply_ok=0; fi
+
+    if [ "$_fa_apply_ok" -ne 1 ]; then
+      audio_warn "hdaa${_fa_unit}: validation failed; rolling the runtime pin associations back immediately."
+      run_privileged sysctl "dev.hdaa.${_fa_unit}.nid${_fa_spnid}_config=as=${_fa_sp_as} seq=${_fa_sp_seq}" >/dev/null 2>&1 || true
+      run_privileged sysctl "dev.hdaa.${_fa_unit}.nid${_fa_hpnid}_config=as=${_fa_hp_as} seq=${_fa_hp_seq}" >/dev/null 2>&1 || true
+      run_privileged sysctl "dev.hdaa.${_fa_unit}.reconfig=1" >/dev/null 2>&1 || true
+      sleep 1
+      freebsd_resume_pulseaudio_after_hda
+      audio_warn "hdaa${_fa_unit}: no persistent changes were written. S.I.P.H.E.R. will continue using the host's existing audio configuration."
+      continue
+    fi
+
+    audio_info "hdaa${_fa_unit}: runtime repair validated (${_fa_post_play} playback-capable PCM, ${_fa_post_rec} capture-capable PCM)."
+    if [ "$_fa_need_persist" -eq 1 ]; then
+      if ! freebsd_persist_headphone_hint "$_fa_unit" "$_fa_hdac" "$_fa_cad" "$_fa_hpnid" "$_fa_target"; then
+        audio_warn "hdaa${_fa_unit}: runtime repair works, but persistence failed; audio may revert after reboot."
+      fi
+    fi
+    freebsd_resume_pulseaudio_after_hda
+  done < "$_fa_candidates_file"
+  rm -f "$_fa_candidates_file"
+}
+
 configure_audio_fixes() {
   [ "$AUTO_AUDIO_FIX" -eq 1 ] || { audio_info "Automatic audio repair disabled (--no-audio-fix)."; return 0; }
+  [ "$OS_FAMILY" = freebsd ] || return 0
+  configure_freebsd_hda_output_compat
+  configure_known_alc236_audio_fix
+}
+
+configure_known_alc236_audio_fix() {
+  [ "$AUTO_AUDIO_FIX" -eq 1 ] || return 0
   [ "$OS_FAMILY" = freebsd ] || return 0
 
   codec_desc=$(sysctl -a 2>/dev/null | sed -n 's/^dev\.hdacc\.[0-9][0-9]*\.%desc: / /p' | sed 's/^ *//' | paste -sd ';' - 2>/dev/null || true)
@@ -756,9 +1011,11 @@ configure_audio_fixes() {
     audio_warn "Known-bad boot HDA pin overrides were disabled. A reboot is recommended after this build so codec associations are rebuilt from the original pin map."
   fi
 
+  freebsd_pause_pulseaudio_for_hda
   run_privileged sysctl "dev.hdaa.${unit}.init_clear=1" >/dev/null
   run_privileged sysctl "dev.hdaa.${unit}.config=forcestereo,ivref80" >/dev/null
   run_privileged sysctl "dev.hdaa.${unit}.reconfig=1" >/dev/null
+  sleep 1
   mic_info=$(sysctl "dev.hdaa.${unit}.nid25" 2>/dev/null || true)
   pin_control=$(printf '%s\n' "$mic_info" | sed -n 's/^[[:space:]]*Pin control: \(0x[0-9A-Fa-f]*\).*/\1/p' | head -1)
   if [ "$pin_control" = "0x00000024" ] || [ "$pin_control" = "0x24" ]; then
@@ -766,6 +1023,7 @@ configure_audio_fixes() {
   else
     audio_warn "ALC236 repair was applied but nid25 did not verify as pin control 0x24; leaving backups in place for manual review."
   fi
+  freebsd_resume_pulseaudio_after_hda
 }
 
 detect_missing_dependencies() {

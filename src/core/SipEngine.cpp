@@ -263,6 +263,10 @@ void SipEngine::start(const SipProfile& p,unsigned maxCalls)
     if(maxCalls<1 || maxCalls>50) throw std::runtime_error("maxCalls must be 1-50");
 
     profile_=p;
+    {
+        std::lock_guard<std::mutex> prefixLock(dialPrefixMutex_);
+        dialPrefix_=profile_.dialPrefix;
+    }
     registered_=false;
     {
         std::lock_guard<std::mutex> lock(regMutex_);
@@ -540,6 +544,22 @@ bool SipEngine::registered()const{return registered_;}
 std::string SipEngine::registrationText()const{std::lock_guard<std::mutex> lock(regMutex_);return registrationText_;}
 const SipProfile& SipEngine::profile()const{return profile_;}
 
+void SipEngine::setDialPrefix(const std::string& prefix)
+{
+    const auto clean=trim(prefix);
+    if(clean.find_first_of(" \t\r\n@<>:")!=std::string::npos)
+        throw std::runtime_error("dial prefix must be a plain dial-string prefix (for example 9 or 4071)");
+    std::lock_guard<std::mutex> lock(dialPrefixMutex_);
+    dialPrefix_=clean;
+    logger_.info(std::string("Runtime dial prefix set to ")+(clean.empty()?"<none>":clean));
+}
+
+std::string SipEngine::dialPrefix()const
+{
+    std::lock_guard<std::mutex> lock(dialPrefixMutex_);
+    return dialPrefix_;
+}
+
 std::string SipEngine::normalizeDestination(const std::string& value,bool applyDialPrefix)const
 {
     const auto v=trim(value);
@@ -548,7 +568,8 @@ std::string SipEngine::normalizeDestination(const std::string& value,bool applyD
     // never modified by the PBX dial-prefix feature.
     if(v.rfind("sip:",0)==0 || v.rfind("sips:",0)==0 || v.find('<')!=std::string::npos) return v;
     if(v.find('@')!=std::string::npos) return "sip:"+v;
-    const auto user=(applyDialPrefix && !profile_.dialPrefix.empty()) ? profile_.dialPrefix+v : v;
+    const auto activePrefix=applyDialPrefix?dialPrefix():std::string{};
+    const auto user=!activePrefix.empty() ? activePrefix+v : v;
     return "sip:"+user+"@"+profile_.sipDomain;
 }
 
@@ -601,7 +622,8 @@ int SipEngine::makeCall(const std::string& destination,const std::string& caller
     const auto afterMake=call->snapshot();
     const int id=afterMake.id!=PJSUA_INVALID_ID ? afterMake.id : call->getId();
     const bool live=addCall(call);
-    logger_.info("Outgoing call "+std::to_string(id)+" -> "+uri+(callerId.empty()?"":" CID="+callerId)+(applyDialPrefix && !profile_.dialPrefix.empty()?" dial-prefix="+profile_.dialPrefix:""));
+    const auto activePrefix=applyDialPrefix?dialPrefix():std::string{};
+    logger_.info("Outgoing call "+std::to_string(id)+" -> "+uri+(callerId.empty()?"":" CID="+callerId)+(!activePrefix.empty()?" dial-prefix="+activePrefix:""));
     if(makeForeground && live) setForeground(id);
     return id;
 }

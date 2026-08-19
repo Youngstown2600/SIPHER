@@ -33,6 +33,11 @@ public:
     void stop();
     bool started()const; bool registered()const; std::string registrationText()const;
     const SipProfile& profile()const;
+    // Runtime dial prefix. Initialized from the profile, but intentionally
+    // changeable without editing/reloading the SIP account. This is routing
+    // state for the PBX currently under test, not account identity.
+    void setDialPrefix(const std::string& prefix);
+    std::string dialPrefix()const;
     int makeCall(const std::string& destination,const std::string& callerId={},bool makeForeground=true,CallPurpose purpose=CallPurpose::Phone,bool applyDialPrefix=true);
     void answer(int id); void reject(int id,int code=603); void hangup(int id); void hangupAll();
     void hold(int id); void resume(int id); void sendDtmf(int id,const std::string& digits,unsigned durationMs=0);
@@ -106,7 +111,9 @@ private:
     mutable std::mutex callCreateMutex_;
     mutable std::mutex audioMutex_;
     mutable std::mutex audioRouteMutex_;
+    mutable std::mutex dialPrefixMutex_;
     SipProfile profile_;
+    std::string dialPrefix_;
     std::unique_ptr<pj::Endpoint> endpoint_;
     std::unique_ptr<SipAccount> account_;
     std::unique_ptr<SipWireMonitor> sipMonitor_;

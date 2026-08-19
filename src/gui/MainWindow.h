@@ -18,7 +18,7 @@ private slots:
 private:
     int selectedCallId()const;void buildUi();void setDiagnosticsEnabled(bool enabled);void selectCallId(int id);
     trunkmonkey::SipEngine& engine_;trunkmonkey::MultiCallManager& multi_;trunkmonkey::Logger& logger_;
-    QLabel* registration_{nullptr};QLineEdit* dialEdit_{nullptr};QLineEdit* callerIdEdit_{nullptr};QCheckBox* useDialPrefix_{nullptr};QTableWidget* calls_{nullptr};
+    QLabel* registration_{nullptr};QLineEdit* dialEdit_{nullptr};QLineEdit* callerIdEdit_{nullptr};QLineEdit* dialPrefixEdit_{nullptr};QTableWidget* calls_{nullptr};
     QLabel* mediaTarget_{nullptr};QLabel* mediaSource_{nullptr};QLabel* mediaLocal_{nullptr};QLabel* mediaCodec_{nullptr};QLabel* mediaQuality_{nullptr};QLabel* callIdLabel_{nullptr};
     QLabel* diagnosticNote_{nullptr};QLabel* captureStatus_{nullptr};QComboBox* captureInterface_{nullptr};QTableWidget* sipLog_{nullptr};QLabel* rawSipFlow_{nullptr};QPlainTextEdit* rawSip_{nullptr};
     QPushButton* sipTraceStart_{nullptr};QPushButton* sipTraceStop_{nullptr};QPushButton* sipPcapStart_{nullptr};QPushButton* rtpPcapStart_{nullptr};QPushButton* callPcapStart_{nullptr};QPushButton* pcapStop_{nullptr};QPushButton* muteButton_{nullptr};

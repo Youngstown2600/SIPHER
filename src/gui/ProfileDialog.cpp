@@ -38,7 +38,7 @@ bool editSipProfileDialog(QWidget* parent,SipProfile& profile,const QString& pro
     QLineEdit displayName(QString::fromStdString(profile.displayName));
     QLineEdit proxy(QString::fromStdString(profile.outboundProxy));
     QLineEdit callerDomain(QString::fromStdString(profile.callerIdDomain));
-    QLineEdit dialPrefix(QString::fromStdString(profile.dialPrefix)); dialPrefix.setPlaceholderText("Optional PBX access prefix, e.g. 9 or 4071");
+    QLineEdit dialPrefix(QString::fromStdString(profile.dialPrefix)); dialPrefix.setPlaceholderText("Optional startup default only; main screen can override per PBX");
     QComboBox transport; transport.addItems({"UDP","TCP","TLS"}); transport.setCurrentText(QString::fromStdString(toString(profile.transport)).toUpper());
     QSpinBox port; port.setRange(1,65535); port.setValue(profile.localSipPort);
     QSpinBox expires; expires.setRange(1,std::numeric_limits<int>::max()); expires.setValue(static_cast<int>(std::min(profile.registrationExpires,static_cast<unsigned>(std::numeric_limits<int>::max()))));
@@ -50,7 +50,7 @@ bool editSipProfileDialog(QWidget* parent,SipProfile& profile,const QString& pro
     form->addRow("Profile name",&name); form->addRow("SIP domain",&domain); form->addRow("Registrar",&registrar);
     form->addRow("Username",&username); form->addRow("Auth username",&authUsername); form->addRow("Password",&password);
     form->addRow("Display name",&displayName); form->addRow("Outbound proxy",&proxy); form->addRow("Caller-ID domain",&callerDomain);
-    form->addRow("Dial prefix",&dialPrefix);
+    form->addRow("Default dial prefix",&dialPrefix);
     form->addRow("Transport",&transport); form->addRow("Local SIP port",&port); form->addRow("Registration expires",&expires);
     form->addRow("Identity mode",&identity); form->addRow("STUN server",&stun); form->addRow("Use ICE",&ice); form->addRow("Enable SRTP",&srtp);
     outer->addLayout(form);

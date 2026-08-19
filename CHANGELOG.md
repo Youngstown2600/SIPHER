@@ -1,3 +1,26 @@
+## S.I.P.H.E.R. 1.0.0 r14 — FreeBSD audio compatibility hardening — 2026-08-19
+
+- Adds a hardware-discovered FreeBSD `snd_hda` compatibility pass to normal CLI/GUI builds.
+- Detects only high-confidence laptop layouts with exactly one fixed `Speaker` pin and one jack `Headphones` pin and no analog `Line-out`; complex desktop/5.1/7.1 layouts are advisory-only.
+- Uses the codec firmware's Speaker association as the conservative target and assigns the headphone pin to the same association with `seq=15`, enabling kernel headphone duplication/auto-mute where jack detection is supported.
+- Before changing HDA routing, r14 checks for existing user pin hints and refuses to override custom policy.
+- Runtime repair pauses user PulseAudio when necessary, rebuilds `snd_hda`, verifies playback/capture PCM availability, and rolls back immediately if validation fails.
+- A validated repair is persisted in `/boot/device.hints` with a timestamped backup; only the headphone hint is written, leaving the firmware Speaker mapping intact.
+- Retains the narrowly fingerprinted ALC236/VREF80 headset-mic repair and all r13 main-screen prefix + r12 live audio hot-swap behavior.
+- Adds `tests/freebsd_audio_compat_test.sh` and a reusable hardware parser at `scripts/freebsd-hda-output-detect.awk`.
+- Builder revision: `sipher-r14-20260819-freebsd-audio-compat`.
+
+## S.I.P.H.E.R. 1.0.0 r13 — Main-screen runtime dial prefix — 2026-08-19
+
+- Moved the operational PBX dial prefix to the main dialing workflow in both GUI and CLI.
+- GUI now has an editable **Dial prefix** field directly beside Destination/Caller ID. Blank means no prefix.
+- CLI Main/Account panel now shows the current prefix; `prefix 4071` changes it immediately and `prefix off` clears it.
+- Guided CLI dialing prompts for the prefix on every call and remembers the chosen value for the session.
+- The profile `dial_prefix` remains supported only as the startup/default value for backward compatibility.
+- Queue/test calls inherit the current runtime prefix through the shared SIP engine.
+- Explicit `sip:`, `sips:`, and `user@domain` destinations continue to bypass prefix manipulation.
+- Builder revision: `sipher-r13-20260819-main-screen-dial-prefix`.
+
 ## S.I.P.H.E.R. 1.0.0 r12 — Linux + FreeBSD live headset/device switching — 2026-08-19
 
 - Extends r11 automatic audio recovery to FreeBSD while retaining Linux PipeWire/PulseAudio support.

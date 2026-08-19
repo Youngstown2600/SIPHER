@@ -394,6 +394,7 @@ std::vector<std::string> CliDashboard::accountLines(const DashboardState& state,
         labelValue("User",fit(p.username,valueWidth)),
         labelValue("Display",fit(p.displayName,valueWidth)),
         labelValue("Domain",fit(p.sipDomain,valueWidth)),
+        labelValue("Dial Prefix",fit(state.dialPrefix.empty()?"<none>":state.dialPrefix,valueWidth)),
         labelValue("Transport",fit(transport,valueWidth)),
         labelValue("Status",status),
         labelValue("Call Count Limit",std::to_string(state.maxCalls)),
@@ -548,6 +549,7 @@ std::vector<std::string> CliDashboard::quickCommandLines(int width,bool compact)
             "1 Call | 2 Calls | 3 Queue",
             "4 Diagnostics | 5 Security Audit | 6 Audio",
             "7 Profile | 8 Themes | 9 Logs",
+            "prefix <value|off> changes PBX prefix",
             "10 Commands | 0 Exit"
         };
         for(auto& line:lines)line=paint(fit(line,static_cast<std::size_t>(std::max(10,width-6))),BRIGHT_CYAN);
@@ -555,7 +557,7 @@ std::vector<std::string> CliDashboard::quickCommandLines(int width,bool compact)
     }
     const std::vector<std::pair<std::string,std::string>> commands={
         {"1","Place a call"},{"2","Manage active calls"},{"3","Queue / call-blast test"},{"4","Call diagnostics & PCAP"},{"5","PBX / SIP security audit"},
-        {"6","Audio & registration"},{"7","SIP account / profile"},{"8","Themes & display"},{"9","Logs & capture utilities"},{"10","Advanced command reference"},{"0","Exit"}
+        {"6","Audio & registration"},{"7","SIP account / profile"},{"8","Themes & display"},{"9","Logs & capture utilities"},{"PFX","prefix <value|off>"},{"10","Advanced command reference"},{"0","Exit"}
     };
     std::vector<std::string> lines;
     for(std::size_t i=0;i<commands.size();++i){std::ostringstream row;row<<std::left<<std::setw(4)<<commands[i].first<<" "<<commands[i].second;lines.push_back(paint(fit(row.str(),static_cast<std::size_t>(std::max(10,width-6))),i<5?BRIGHT_CYAN:WHITE));}
@@ -628,7 +630,7 @@ std::vector<std::string> CliDashboard::profileLines(const DashboardState& state,
         labelValue("Registrar",fit(p.registrar,vw)),labelValue("Username",fit(p.username,vw)),
         labelValue("Auth username",fit(p.authUsername,vw)),labelValue("Password",p.password.empty()?"<empty>":"<saved>"),
         labelValue("Display name",fit(p.displayName,vw)),labelValue("Outbound proxy",fit(p.outboundProxy.empty()?"--":p.outboundProxy,vw)),
-        labelValue("Caller-ID domain",fit(p.callerIdDomain.empty()?"--":p.callerIdDomain,vw)),labelValue("Dial prefix",fit(p.dialPrefix.empty()?"--":p.dialPrefix,vw)),labelValue("Transport",upper(toString(p.transport))),
+        labelValue("Caller-ID domain",fit(p.callerIdDomain.empty()?"--":p.callerIdDomain,vw)),labelValue("Profile default prefix",fit(p.dialPrefix.empty()?"--":p.dialPrefix,vw)),labelValue("Current dial prefix",fit(state.dialPrefix.empty()?"--":state.dialPrefix,vw)),labelValue("Transport",upper(toString(p.transport))),
         labelValue("Local SIP port",std::to_string(p.localSipPort)),labelValue("Registration expires",std::to_string(p.registrationExpires)+" sec"),
         labelValue("Identity mode",toString(p.identityMode)),labelValue("STUN",fit(p.stunServer.empty()?"--":p.stunServer,vw)),
         labelValue("ICE",p.useIce?"enabled":"disabled"),labelValue("SRTP",p.enableSrtp?"enabled":"disabled"),
