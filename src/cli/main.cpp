@@ -273,7 +273,7 @@ Advanced Commands:
  foreground <id> | foreground-none
  hold <id> | resume <id> | mute <id> | unmute <id> | dtmf <id> <digits>
  media <id> | stats <id> | ladder <id>
- audio-devices | audio-use <capture-id> <playback-id> | reg-history
+ audio-devices | audio-output <playback-id> | audio-use <capture-id> <playback-id> | reg-history
  report <id> [file]            show or export a call diagnostic report
  siplog <id>                   select call and show live SIP signals in dashboard
  sipraw <id> <index>           full raw SIP message from siplog
@@ -556,14 +556,25 @@ std::string guidedOperatorWorkflow(CliDashboard& dashboard,const SipEngine& engi
     }
 
     if(category==6){
-        const int action=askOperatorChoice("AUDIO & REGISTRATION",{"Show audio devices","Choose microphone and playback device","Registration history"});
+        const int action=askOperatorChoice("AUDIO & REGISTRATION",{"Show audio devices","Choose audio output device","Choose microphone and playback device","Registration history"});
         if(action==1) return "audio-devices";
         if(action==2){
+            std::cout<<"\nPLAYBACK / OUTPUT DEVICES\n-------------------------\n";
+            const int active=engine.activePlaybackDevice();
+            for(const auto& d:engine.audioDevices()){
+                if(d.outputCount==0) continue;
+                std::cout<<"["<<d.id<<"] "<<d.driver<<" / "<<d.name
+                         <<"  outputs="<<d.outputCount<<(d.id==active?"  <ACTIVE>":"")<<"\n";
+            }
+            const auto p=askOperator("Playback / output device ID",active>=0?std::to_string(active):std::string{});
+            return p.empty()?std::string{}:"audio-output "+p;
+        }
+        if(action==3){
             const auto c=askOperator("Capture / microphone device ID");
             const auto p=askOperator("Playback device ID");
             return(c.empty()||p.empty())?std::string{}:"audio-use "+c+" "+p;
         }
-        if(action==3) return "reg-history";
+        if(action==4) return "reg-history";
         return {};
     }
     if(category==7){
@@ -920,6 +931,10 @@ int main(int argc,char** argv)
                 std::ostringstream out;out<<"Active capture ID: "<<engine.activeCaptureDevice()<<"\nActive playback ID: "<<engine.activePlaybackDevice()<<"\n\n";
                 for(const auto&d:engine.audioDevices())out<<"["<<d.id<<"] "<<d.driver<<" / "<<d.name<<"  inputs="<<d.inputCount<<" outputs="<<d.outputCount<<"\n";
                 dashboard.showOverlay("AUDIO DEVICES",out.str(),std::cout);dashboard.pauseForEnter(std::cin,std::cout);
+            }else if(cmd=="audio-output"){
+                int playback=-1;if(!(in>>playback))throw std::runtime_error("audio-output requires playback-id");
+                engine.selectPlaybackDevice(playback);
+                addNotice("Audio output selected: playback="+std::to_string(playback)+" (microphone unchanged)",DashboardNotice::Level::Success);
             }else if(cmd=="audio-use"){
                 int capture=-1,playback=-1;if(!(in>>capture>>playback))throw std::runtime_error("audio-use requires capture-id and playback-id");engine.selectAudioDevices(capture,playback);
                 addNotice("Audio devices selected: capture="+std::to_string(capture)+" playback="+std::to_string(playback),DashboardNotice::Level::Success);

@@ -1,3 +1,12 @@
+## S.I.P.H.E.R. 1.0.0 r9 — Unix/Linux audio output selector — 2026-08-18
+
+- Added a dedicated Unix/Linux GUI **Settings -> Audio Output...** selector for playback-capable PJSIP devices.
+- Added CLI `audio-output <playback-id>` and a guided **Choose audio output device** workflow.
+- Output-only changes preserve the current microphone/capture device.
+- If a foreground call is active, its audio bridge is rebound immediately to the newly selected playback device.
+- Existing full `audio-use <capture-id> <playback-id>` routing remains available.
+- Builder revision: `sipher-r9-20260818-unix-audio-output`.
+
 ## S.I.P.H.E.R. 1.0.0 r8 — Automated chained audit / FreeBSD pthread fix
 
 - Link CaptureManager regression test with `Threads::Threads` on all platforms.
@@ -240,3 +249,4 @@
 - The PJSIP compatibility stamp is v9 so older local builds are rebuilt once with the r11 ABI/I/O-queue recipe.
 
 - r11: managed PJSIP now sets `PJ_IOQUEUE_MAX_HANDLES=256` for the 64-call compile-time ceiling and validates it before building S.I.P.H.E.R..
+

@@ -12,7 +12,7 @@ private slots:
     void refresh();void refreshDiagnostics();void showRawSip();
     void dial();void answerSelected();void hangupSelected();void foregroundSelected();void holdSelected();void resumeSelected();void toggleMuteSelected();void showDtmfPad();
     void startSipTrace();void stopSipTrace();void startSipPcap();void startRtpPcap();void startCallPcap();void stopPcaps();void openLastPcap();
-    void launchBatch();void loadDestinations();void loadCallerIds();void loadQueueAudio();void hangupAll();void editProfile();void showAudioDevices();void showRegistrationHistory();void applyTheme(const QString& theme);
+    void launchBatch();void loadDestinations();void loadCallerIds();void loadQueueAudio();void hangupAll();void editProfile();void showAudioDevices();void showAudioOutput();void showRegistrationHistory();void applyTheme(const QString& theme);
     void showSipLadder();void exportCallReport();
     void runAuditAuto();void runAuditFingerprint();void runAuditVulns();void runAuditProbe();void runAuditDiscover();void runAuditMethods();void runAuditAuth();void runAuditExtensions();void runAuditCompliance();void runAuditParser();void runAuditResilience();void runAuditScenario();void runAuditTls();void runAuditFull();void saveAuditReport();
 private:

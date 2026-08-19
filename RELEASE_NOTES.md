@@ -1,3 +1,10 @@
+# S.I.P.H.E.R. 1.0.0 r9 — Unix/Linux audio output selector — 2026-08-18
+
+- New GUI `Settings -> Audio Output...` control on Unix/Linux.
+- New CLI `audio-output <playback-id>` command and guided output-device menu.
+- Playback can be switched independently of capture/microphone routing, including during a foreground call.
+- Builder revision `sipher-r9-20260818-unix-audio-output`.
+
 # S.I.P.H.E.R. 1.0.0 r8 — Chained Security Audit + FreeBSD pthread Fix
 
 - Fixed the FreeBSD/Clang `pthread_create` linker failure in `tm-capture-manager-test` by linking the standalone CaptureManager test target to CMake `Threads::Threads`.

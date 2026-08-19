@@ -28,6 +28,7 @@ public:
     std::vector<AudioDeviceInfo> audioDevices()const;
     int activeCaptureDevice()const; int activePlaybackDevice()const;
     void selectAudioDevices(int captureId,int playbackId);
+    void selectPlaybackDevice(int playbackId);
     void setCallAudioFile(int id,const std::string& path);
     void setForeground(int id); void clearForeground();
     std::vector<CallSnapshot> calls()const;

@@ -73,6 +73,11 @@ void MainWindow::buildUi(){
     connect(profileAction,&QAction::triggered,this,&MainWindow::editProfile);
     auto* audioAction=settingsMenu->addAction(QStringLiteral("&Audio Devices..."));
     connect(audioAction,&QAction::triggered,this,&MainWindow::showAudioDevices);
+#ifndef _WIN32
+    auto* audioOutputAction=settingsMenu->addAction(QStringLiteral("Audio &Output..."));
+    audioOutputAction->setToolTip(QStringLiteral("Choose the Unix/Linux playback device without changing the microphone"));
+    connect(audioOutputAction,&QAction::triggered,this,&MainWindow::showAudioOutput);
+#endif
     auto* regHistoryAction=settingsMenu->addAction(QStringLiteral("&Registration History..."));
     connect(regHistoryAction,&QAction::triggered,this,&MainWindow::showRegistrationHistory);
 
@@ -221,6 +226,55 @@ void MainWindow::showSipLadder(){int id=selectedCallId();if(id<0)return;try{QMes
 void MainWindow::exportCallReport(){int id=selectedCallId();if(id<0)return;auto path=QFileDialog::getSaveFileName(this,"Export call diagnostic report",QString("sipher-call-%1-report.txt").arg(id),"Text reports (*.txt);;All files (*)");if(path.isEmpty())return;try{engine_.exportCallReport(id,path.toStdString());statusBar()->showMessage("Call report exported",5000);}catch(const std::exception&e){QMessageBox::warning(this,"Call report",e.what());}}
 
 void MainWindow::showAudioDevices(){try{const auto devices=engine_.audioDevices();if(devices.empty()){QMessageBox::information(this,"Audio Devices","No PJSIP audio devices are available.");return;}QDialog d(this);d.setWindowTitle("Audio Devices");auto*layout=new QVBoxLayout(&d);auto*form=new QFormLayout;auto*capture=new QComboBox;auto*playback=new QComboBox;for(const auto&dev:devices){const auto label=QString("[%1] %2 / %3").arg(dev.id).arg(QString::fromStdString(dev.driver)).arg(QString::fromStdString(dev.name));if(dev.inputCount>0){capture->addItem(label,dev.id);if(dev.id==engine_.activeCaptureDevice())capture->setCurrentIndex(capture->count()-1);}if(dev.outputCount>0){playback->addItem(label,dev.id);if(dev.id==engine_.activePlaybackDevice())playback->setCurrentIndex(playback->count()-1);}}form->addRow("Microphone",capture);form->addRow("Playback",playback);layout->addLayout(form);auto*hint=new QLabel("Capture and playback are independent. S.I.P.H.E.R. keeps the verified FreeBSD headset-mic auto-routing, but these controls let you override it when using USB/HDMI/other devices.");hint->setWordWrap(true);layout->addWidget(hint);auto*buttons=new QGridLayout;auto*apply=new QPushButton("APPLY");auto*cancel=new QPushButton("CANCEL");buttons->addWidget(apply,0,0);buttons->addWidget(cancel,0,1);layout->addLayout(buttons);connect(cancel,&QPushButton::clicked,&d,&QDialog::reject);connect(apply,&QPushButton::clicked,&d,[&](){engine_.selectAudioDevices(capture->currentData().toInt(),playback->currentData().toInt());d.accept();});d.exec();}catch(const pj::Error&e){QMessageBox::warning(this,"Audio Devices",QString::fromStdString(e.info()));}catch(const std::exception&e){QMessageBox::warning(this,"Audio Devices",e.what());}}
+
+void MainWindow::showAudioOutput()
+{
+    try{
+        const auto devices=engine_.audioDevices();
+        QDialog d(this);
+        d.setWindowTitle("Audio Output");
+        auto* layout=new QVBoxLayout(&d);
+        auto* form=new QFormLayout;
+        auto* playback=new QComboBox;
+        for(const auto& dev:devices){
+            if(dev.outputCount==0) continue;
+            const auto label=QString("[%1] %2 / %3  (%4 output channel%5)")
+                .arg(dev.id)
+                .arg(QString::fromStdString(dev.driver))
+                .arg(QString::fromStdString(dev.name))
+                .arg(dev.outputCount)
+                .arg(dev.outputCount==1 ? "" : "s");
+            playback->addItem(label,dev.id);
+            if(dev.id==engine_.activePlaybackDevice()) playback->setCurrentIndex(playback->count()-1);
+        }
+        if(playback->count()==0){
+            QMessageBox::information(this,"Audio Output","No playback-capable PJSIP audio devices are available.");
+            return;
+        }
+        form->addRow("Output device",playback);
+        layout->addLayout(form);
+        auto* hint=new QLabel("Changes only the call playback/output device. Your current microphone/capture device is left unchanged. On Unix/Linux this can be used to move call audio between speakers, USB headsets, HDMI/DisplayPort audio, and other PJSIP-visible outputs.");
+        hint->setWordWrap(true);
+        layout->addWidget(hint);
+        auto* buttons=new QGridLayout;
+        auto* apply=new QPushButton("USE OUTPUT");
+        auto* cancel=new QPushButton("CANCEL");
+        buttons->addWidget(apply,0,0);buttons->addWidget(cancel,0,1);
+        layout->addLayout(buttons);
+        connect(cancel,&QPushButton::clicked,&d,&QDialog::reject);
+        connect(apply,&QPushButton::clicked,&d,[&](){
+            const int id=playback->currentData().toInt();
+            engine_.selectPlaybackDevice(id);
+            statusBar()->showMessage(QString("Audio output changed to device %1").arg(id),5000);
+            d.accept();
+        });
+        d.exec();
+    }catch(const pj::Error&e){
+        QMessageBox::warning(this,"Audio Output",QString::fromStdString(e.info()));
+    }catch(const std::exception&e){
+        QMessageBox::warning(this,"Audio Output",e.what());
+    }
+}
 void MainWindow::showRegistrationHistory(){std::ostringstream out;for(const auto&line:engine_.registrationHistory())out<<line<<"\n";QMessageBox box(this);box.setWindowTitle("Registration History");box.setTextFormat(Qt::PlainText);box.setText(QString::fromStdString(out.str().empty()?std::string("No registration state changes recorded yet."):out.str()));box.exec();}
 
 static AuditTransport guiAuditTransport(QComboBox* box){return PbxAudit::transportFromString(box?box->currentData().toString().toStdString():"udp");}

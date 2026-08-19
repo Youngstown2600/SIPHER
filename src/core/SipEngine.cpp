@@ -541,6 +541,31 @@ void SipEngine::selectAudioDevices(int captureId,int playbackId)
     if(foreground)foreground->attachAudio();
 }
 
+void SipEngine::selectPlaybackDevice(int playbackId)
+{
+    if(!endpoint_)throw std::runtime_error("SIP engine is not started");
+    auto& audio=endpoint_->audDevManager();
+    const auto devices=audio.enumDev2();
+    if(playbackId<0 || static_cast<std::size_t>(playbackId)>=devices.size() ||
+       devices[static_cast<std::size_t>(playbackId)].outputCount<=0)
+        throw std::runtime_error("Invalid playback device ID");
+
+    audio.setPlaybackDev(playbackId);
+    logger_.info("Audio output selected: playback="+std::to_string(playbackId)+
+                 " driver=\""+devices[static_cast<std::size_t>(playbackId)].driver+
+                 "\" name=\""+devices[static_cast<std::size_t>(playbackId)].name+"\"");
+
+    // Rebind the foreground call so an in-progress call follows the newly
+    // selected speakers/headset immediately. Capture routing is untouched.
+    std::shared_ptr<CallSession> foreground;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it=calls_.find(foregroundId_);
+        if(it!=calls_.end()) foreground=it->second;
+    }
+    if(foreground) foreground->attachAudio();
+}
+
 void SipEngine::setCallAudioFile(int id,const std::string& path)
 {
     auto call=findCall(id);

@@ -55,3 +55,15 @@ The verified FreeBSD ALC236/VREF80 repair and automatic headset-microphone routi
 ## PBX audit safety
 
 PBX audit workflows are for systems you own or are explicitly authorized to test. Active probes can trigger IDS/IPS, alarms, rate limits, or PBX protection controls. The security-audit functions remain bounded and preserve the safety limits from TrunkMonkey 2.0 r20.
+
+
+## Unix/Linux audio output selection
+
+S.I.P.H.E.R. can switch the PJSIP playback device at runtime without changing the active microphone. This is useful for moving call audio among built-in speakers, USB headsets, HDMI/DisplayPort outputs, and other audio devices exposed to PJSIP.
+
+- **GUI (Unix/Linux):** `Settings -> Audio Output...` lists playback-capable devices and marks the active selection. Applying a selection changes output only.
+- **CLI guided menu:** choose `Audio devices & registration history -> Choose audio output device`.
+- **CLI command:** run `audio-devices` to list IDs, then `audio-output <playback-id>`.
+- **Startup override:** `SIPHER_PLAYBACK_DEVICE=<id> sipher` (or `sipher-gui`) still selects an output before registration.
+
+The existing `audio-use <capture-id> <playback-id>` command and GUI `Audio Devices...` dialog remain available when both microphone and playback routing need to be changed.
