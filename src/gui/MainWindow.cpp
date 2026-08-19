@@ -73,9 +73,24 @@ void MainWindow::buildUi(){
     connect(profileAction,&QAction::triggered,this,&MainWindow::editProfile);
     auto* audioAction=settingsMenu->addAction(QStringLiteral("&Audio Devices..."));
     connect(audioAction,&QAction::triggered,this,&MainWindow::showAudioDevices);
+    auto* audioStatusAction=settingsMenu->addAction(QStringLiteral("Audio &Status..."));
+    connect(audioStatusAction,&QAction::triggered,this,&MainWindow::showAudioStatus);
+#ifndef _WIN32
+    auto* audioAutoAction=settingsMenu->addAction(QStringLiteral("Automatically Follow &Headset / System Audio"));
+    audioAutoAction->setCheckable(true);
+    audioAutoAction->setChecked(engine_.audioAutoSwitchEnabled());
+    audioAutoAction->setToolTip(QStringLiteral("Automatically reopen and reattach PJSIP audio when Linux PipeWire/PulseAudio or FreeBSD OSS/snd_hda routing changes"));
+    connect(audioAutoAction,&QAction::toggled,this,[this](bool enabled){
+        engine_.setAudioAutoSwitch(enabled);
+        statusBar()->showMessage(enabled?QStringLiteral("Automatic headset/device switching enabled"):QStringLiteral("Automatic headset/device switching disabled"),5000);
+    });
+#endif
+    auto* audioReopenAction=settingsMenu->addAction(QStringLiteral("&Reopen / Refresh Audio"));
+    audioReopenAction->setToolTip(QStringLiteral("Close and reopen the PJSIP sound device, refresh device IDs, and reattach the active call"));
+    connect(audioReopenAction,&QAction::triggered,this,&MainWindow::reopenAudio);
 #ifndef _WIN32
     auto* audioOutputAction=settingsMenu->addAction(QStringLiteral("Audio &Output..."));
-    audioOutputAction->setToolTip(QStringLiteral("Choose the Unix/Linux playback device without changing the microphone"));
+    audioOutputAction->setToolTip(QStringLiteral("Choose the Unix/Linux playback device without changing the microphone; the sound device is reopened immediately"));
     connect(audioOutputAction,&QAction::triggered,this,&MainWindow::showAudioOutput);
 #endif
     auto* regHistoryAction=settingsMenu->addAction(QStringLiteral("&Registration History..."));
@@ -106,14 +121,14 @@ void MainWindow::buildUi(){
 
     // MAIN: phone controls, selected media and packet capture in one compact workspace.
     auto*mainPage=new QWidget;auto*ml=new QVBoxLayout(mainPage);ml->setContentsMargins(7,7,7,7);ml->setSpacing(6);
-    auto*f=new QFormLayout;dialEdit_=new QLineEdit;dialEdit_->setPlaceholderText("3305551212 or sip:user@example.net");callerIdEdit_=new QLineEdit;callerIdEdit_->setPlaceholderText("Optional caller identity");f->addRow("Destination",dialEdit_);f->addRow("Caller ID",callerIdEdit_);ml->addLayout(f);
+    auto*f=new QFormLayout;dialEdit_=new QLineEdit;dialEdit_->setPlaceholderText("3305551212 or sip:user@example.net");callerIdEdit_=new QLineEdit;callerIdEdit_->setPlaceholderText("Optional caller identity");useDialPrefix_=new QCheckBox;const auto configuredPrefix=engine_.profile().dialPrefix;useDialPrefix_->setText(configuredPrefix.empty()?QStringLiteral("Use configured dial prefix (none configured)"):QString("Use configured dial prefix: %1").arg(QString::fromStdString(configuredPrefix)));useDialPrefix_->setChecked(!configuredPrefix.empty());useDialPrefix_->setEnabled(!configuredPrefix.empty());useDialPrefix_->setToolTip("The prefix is prepended only to plain dial strings. Explicit sip:/sips: URIs and user@domain destinations are never modified.");f->addRow("Destination",dialEdit_);f->addRow("Caller ID",callerIdEdit_);f->addRow("PBX prefix",useDialPrefix_);ml->addLayout(f);
     auto*r=new QGridLayout;auto*b=new QPushButton("CALL");connect(b,&QPushButton::clicked,this,&MainWindow::dial);r->addWidget(b,0,0);b=new QPushButton("ANSWER");connect(b,&QPushButton::clicked,this,&MainWindow::answerSelected);r->addWidget(b,0,1);b=new QPushButton("HANGUP");connect(b,&QPushButton::clicked,this,&MainWindow::hangupSelected);r->addWidget(b,0,2);b=new QPushButton("DTMF PAD...");connect(b,&QPushButton::clicked,this,&MainWindow::showDtmfPad);r->addWidget(b,0,3);muteButton_=new QPushButton("MUTE MIC");connect(muteButton_,&QPushButton::clicked,this,&MainWindow::toggleMuteSelected);r->addWidget(muteButton_,0,4);b=new QPushButton("HANGUP ALL");connect(b,&QPushButton::clicked,this,&MainWindow::hangupAll);r->addWidget(b,0,5);b=new QPushButton("EXIT");connect(b,&QPushButton::clicked,qApp,&QApplication::quit);r->addWidget(b,0,6);ml->addLayout(r);
 
     auto*mediaBox=new QGroupBox("Selected Call Media");auto*media=new QGridLayout(mediaBox);callIdLabel_=new QLabel("--");mediaTarget_=new QLabel("--");mediaSource_=new QLabel("--");mediaLocal_=new QLabel("--");mediaCodec_=new QLabel("--");mediaQuality_=new QLabel("--");mediaQuality_->setTextInteractionFlags(Qt::TextSelectableByMouse);media->addWidget(new QLabel("SIP Call-ID:"),0,0);media->addWidget(callIdLabel_,0,1,1,3);media->addWidget(new QLabel("RTP target:"),1,0);media->addWidget(mediaTarget_,1,1);media->addWidget(new QLabel("RTP source:"),1,2);media->addWidget(mediaSource_,1,3);media->addWidget(new QLabel("Local RTP:"),2,0);media->addWidget(mediaLocal_,2,1);media->addWidget(new QLabel("Codec:"),2,2);media->addWidget(mediaCodec_,2,3);media->addWidget(new QLabel("Quality:"),3,0);media->addWidget(mediaQuality_,3,1,1,3);media->setColumnStretch(1,1);media->setColumnStretch(3,1);ml->addWidget(mediaBox);auto*diagButtons=new QGridLayout;b=new QPushButton("SIP LADDER...");connect(b,&QPushButton::clicked,this,&MainWindow::showSipLadder);diagButtons->addWidget(b,0,0);b=new QPushButton("EXPORT CALL REPORT...");connect(b,&QPushButton::clicked,this,&MainWindow::exportCallReport);diagButtons->addWidget(b,0,1);ml->addLayout(diagButtons);
 
     auto*capBox=new QGroupBox("Packet Capture");auto*cap=new QGridLayout(capBox);captureInterface_=new QComboBox;captureInterface_->setEditable(true);for(const auto& iface:CaptureManager::availableInterfaces())captureInterface_->addItem(QString::fromStdString(iface));if(captureInterface_->count()==0)captureInterface_->addItem("any");int anyIndex=captureInterface_->findText("any");if(anyIndex>=0)captureInterface_->setCurrentIndex(anyIndex);captureInterface_->setToolTip(QString::fromStdString(CaptureManager::permissionHint()));cap->addWidget(new QLabel("Interface:"),0,0);cap->addWidget(captureInterface_,0,1);
-    sipPcapStart_=new QPushButton("START SIP PCAP...");connect(sipPcapStart_,&QPushButton::clicked,this,&MainWindow::startSipPcap);cap->addWidget(sipPcapStart_,0,2);rtpPcapStart_=new QPushButton("START RTP PCAP...");connect(rtpPcapStart_,&QPushButton::clicked,this,&MainWindow::startRtpPcap);cap->addWidget(rtpPcapStart_,0,3);callPcapStart_=new QPushButton("START CALL PCAP...");connect(callPcapStart_,&QPushButton::clicked,this,&MainWindow::startCallPcap);cap->addWidget(callPcapStart_,0,4);pcapStop_=new QPushButton("STOP PCAPS");connect(pcapStop_,&QPushButton::clicked,this,&MainWindow::stopPcaps);cap->addWidget(pcapStop_,0,5);captureStatus_=new QLabel("SIP PCAP: stopped | RTP PCAP: stopped | CALL PCAP: stopped");captureStatus_->setWordWrap(true);cap->addWidget(captureStatus_,1,0,1,4);b=new QPushButton("OPEN LAST PCAP (AUTO RTP)");b->setToolTip("Launch Wireshark with this call's negotiated RTP/RTCP ports pre-decoded; no manual Decode As step.");connect(b,&QPushButton::clicked,this,&MainWindow::openLastPcap);cap->addWidget(b,1,4,1,2);auto*perm=new QLabel(QString::fromStdString(CaptureManager::permissionHint()));perm->setWordWrap(true);perm->setStyleSheet(QStringLiteral("font-size: 10px;"));cap->addWidget(perm,2,0,1,6);ml->addWidget(capBox);
-    auto*mainNote=new QLabel("Select a normal Phone call on Active Calls for media/capture controls. RTP-only PCAPs may require Wireshark's rtp_udp heuristic to populate RTP Streams.");mainNote->setWordWrap(true);ml->addWidget(mainNote);ml->addStretch();tabs_->addTab(mainPage,"Main");
+    sipPcapStart_=new QPushButton("START SIP PCAP (PRE-DIAL)...");connect(sipPcapStart_,&QPushButton::clicked,this,&MainWindow::startSipPcap);cap->addWidget(sipPcapStart_,0,2);rtpPcapStart_=new QPushButton("START RTP PCAP...");connect(rtpPcapStart_,&QPushButton::clicked,this,&MainWindow::startRtpPcap);cap->addWidget(rtpPcapStart_,0,3);callPcapStart_=new QPushButton("START CALL PCAP...");connect(callPcapStart_,&QPushButton::clicked,this,&MainWindow::startCallPcap);cap->addWidget(callPcapStart_,0,4);pcapStop_=new QPushButton("STOP PCAPS");connect(pcapStop_,&QPushButton::clicked,this,&MainWindow::stopPcaps);cap->addWidget(pcapStop_,0,5);captureStatus_=new QLabel("SIP PCAP: stopped | RTP PCAP: stopped | CALL PCAP: stopped");captureStatus_->setWordWrap(true);cap->addWidget(captureStatus_,1,0,1,4);b=new QPushButton("OPEN LAST PCAP IN WIRESHARK");b->setToolTip("SIP captures are forced through Wireshark's SIP dissector; RTP/combined captures use negotiated RTP/RTCP Decode As.");connect(b,&QPushButton::clicked,this,&MainWindow::openLastPcap);cap->addWidget(b,1,4,1,2);auto*perm=new QLabel(QString::fromStdString(CaptureManager::permissionHint()));perm->setWordWrap(true);perm->setStyleSheet(QStringLiteral("font-size: 10px;"));cap->addWidget(perm,2,0,1,6);ml->addWidget(capBox);
+    auto*mainNote=new QLabel("SIP PCAP can be started BEFORE dialing so Wireshark captures the initial INVITE, the exact prefixed Request-URI sent to Asterisk/FreePBX, and responses such as 403/401/407. RTP/combined capture still requires a selected active Phone call. RTP-only PCAPs may require Wireshark's rtp_udp heuristic to populate RTP Streams.");mainNote->setWordWrap(true);ml->addWidget(mainNote);ml->addStretch();tabs_->addTab(mainPage,"Main");
 
     // ACTIVE CALLS
     auto*active=new QWidget;auto*al=new QVBoxLayout(active);calls_=new QTableWidget(0,12);calls_->setHorizontalHeaderLabels({"ID","Mode","Dir","FG","State","SIP","Remote","Caller ID","RTP Target","RTP Source","Codec","Reason"});calls_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);calls_->horizontalHeader()->setStretchLastSection(true);calls_->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);calls_->setColumnWidth(0,48);calls_->setColumnWidth(1,72);calls_->setColumnWidth(2,48);calls_->setColumnWidth(3,38);calls_->setColumnWidth(4,110);calls_->setColumnWidth(5,58);calls_->setColumnWidth(6,190);calls_->setColumnWidth(7,120);calls_->setSelectionBehavior(QAbstractItemView::SelectRows);calls_->setSelectionMode(QAbstractItemView::SingleSelection);connect(calls_,&QTableWidget::itemSelectionChanged,this,&MainWindow::refreshDiagnostics);al->addWidget(calls_,1);
@@ -122,7 +137,7 @@ void MainWindow::buildUi(){
     // SIP LOG
     auto*sipPage=new QWidget;auto*sl=new QVBoxLayout(sipPage);diagnosticNote_=new QLabel("Select a normal Phone call on Active Calls to inspect its SIP dialog.");diagnosticNote_->setWordWrap(true);sl->addWidget(diagnosticNote_);
     auto*sipButtons=new QGridLayout;sipTraceStart_=new QPushButton("START RAW SIP TRACE...");connect(sipTraceStart_,&QPushButton::clicked,this,&MainWindow::startSipTrace);sipButtons->addWidget(sipTraceStart_,0,0);sipTraceStop_=new QPushButton("STOP RAW SIP TRACE");connect(sipTraceStop_,&QPushButton::clicked,this,&MainWindow::stopSipTrace);sipButtons->addWidget(sipTraceStop_,0,1);sl->addLayout(sipButtons);
-    sipLog_=new QTableWidget(0,6);sipLog_->setHorizontalHeaderLabels({"Time","Dir","Signal","CSeq","Code","Reason"});sipLog_->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);sipLog_->horizontalHeader()->setStretchLastSection(true);sipLog_->setSelectionBehavior(QAbstractItemView::SelectRows);sipLog_->setSelectionMode(QAbstractItemView::SingleSelection);connect(sipLog_,&QTableWidget::itemSelectionChanged,this,&MainWindow::showRawSip);sl->addWidget(sipLog_,2);rawSip_=new QPlainTextEdit;rawSip_->setReadOnly(true);rawSip_->setPlaceholderText("Select a SIP transaction above to inspect the full message.");rawSip_->setMaximumBlockCount(10000);sl->addWidget(rawSip_,2);tabs_->addTab(sipPage,"SIP Log");
+    sipLog_=new QTableWidget(0,6);sipLog_->setHorizontalHeaderLabels({"Time","Flow","Signal","CSeq","Code","Reason"});sipLog_->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);sipLog_->horizontalHeader()->setStretchLastSection(true);sipLog_->setSelectionBehavior(QAbstractItemView::SelectRows);sipLog_->setSelectionMode(QAbstractItemView::SingleSelection);connect(sipLog_,&QTableWidget::itemSelectionChanged,this,&MainWindow::showRawSip);sl->addWidget(sipLog_,2);rawSipFlow_=new QLabel("Select a SIP signal above. SENT means S.I.P.H.E.R. transmitted it to the PBX; RECEIVED means it came from the PBX.");rawSipFlow_->setWordWrap(true);rawSipFlow_->setStyleSheet(QStringLiteral("font-weight:700;"));sl->addWidget(rawSipFlow_);rawSip_=new QPlainTextEdit;rawSip_->setReadOnly(true);rawSip_->setPlaceholderText("Select a SIP transaction above to inspect the full message.");rawSip_->setMaximumBlockCount(10000);sl->addWidget(rawSip_,2);tabs_->addTab(sipPage,"SIP Log");
 
     // QUEUE TEST
     auto*q=new QWidget;auto*ql=new QVBoxLayout(q);f=new QFormLayout;batchCount_=new QSpinBox;batchCount_->setRange(1,50);batchCount_->setValue(5);launchInterval_=new QSpinBox;launchInterval_->setRange(50,60000);launchInterval_->setValue(250);launchInterval_->setSuffix(" ms");batchDestination_=new QLineEdit;batchDestination_->setPlaceholderText("Single queue/DID target");fixedCallerId_=new QLineEdit;fixedCallerId_->setPlaceholderText("Fixed CID (ignored when list is loaded)");f->addRow("Calls",batchCount_);f->addRow("Launch interval",launchInterval_);f->addRow("Single destination",batchDestination_);f->addRow("Fixed caller ID",fixedCallerId_);ql->addLayout(f);destinationFileLabel_=new QLabel("No destination list loaded");callerIdFileLabel_=new QLabel("No caller-ID list loaded");queueAudioFileLabel_=new QLabel("Live/no injected audio");r=new QGridLayout;b=new QPushButton("LOAD DESTINATIONS.TXT");connect(b,&QPushButton::clicked,this,&MainWindow::loadDestinations);r->addWidget(b,0,0);r->addWidget(destinationFileLabel_,0,1);b=new QPushButton("LOAD CALLERIDS.TXT");connect(b,&QPushButton::clicked,this,&MainWindow::loadCallerIds);r->addWidget(b,1,0);r->addWidget(callerIdFileLabel_,1,1);b=new QPushButton("LOAD AUDIO FILE...");connect(b,&QPushButton::clicked,this,&MainWindow::loadQueueAudio);r->addWidget(b,2,0);r->addWidget(queueAudioFileLabel_,2,1);ql->addLayout(r);auto*note=new QLabel("Each launched call is an independent SIP dialog and RTP session. Optional WAV/MP3 audio is normalized by ffmpeg and injected into every queue-test call. Batch calls are not conferenced and are not automatically routed to the local headset.");note->setWordWrap(true);ql->addWidget(note);b=new QPushButton("START QUEUE TEST");connect(b,&QPushButton::clicked,this,&MainWindow::launchBatch);ql->addWidget(b);ql->addStretch();tabs_->addTab(q,"Queue Test");
@@ -145,9 +160,14 @@ void MainWindow::buildUi(){
 }
 
 void MainWindow::refresh(){
+    try{
+        if(engine_.pollSystemAudioRoute()) statusBar()->showMessage("Audio route changed — PJSIP sound device reopened and active call reattached",5000);
+    }catch(const std::exception& e){
+        statusBar()->showMessage(QString("Audio hot-plug recovery failed: %1").arg(e.what()),7000);
+    }
     registration_->setText(QString::fromStdString("SIP: "+engine_.registrationText()));
-    if(profileSummary_){const auto&p=engine_.profile();profileSummary_->setText(QString("<b>%1</b><br>File: %2<br>SIP URI: sip:%3@%4<br>Registrar: %5<br>Transport: %6<br>ICE: %7 &nbsp; SRTP: %8")
-        .arg(QString::fromStdString(p.name)).arg(QString::fromStdString(profilePath_)).arg(QString::fromStdString(p.username)).arg(QString::fromStdString(p.sipDomain)).arg(QString::fromStdString(p.registrar)).arg(QString::fromStdString(toString(p.transport)).toUpper()).arg(p.useIce?"enabled":"disabled").arg(p.enableSrtp?"enabled":"disabled"));}
+    if(profileSummary_){const auto&p=engine_.profile();profileSummary_->setText(QString("<b>%1</b><br>File: %2<br>SIP URI: sip:%3@%4<br>Registrar: %5<br>Dial prefix: %6<br>Transport: %7<br>ICE: %8 &nbsp; SRTP: %9")
+        .arg(QString::fromStdString(p.name)).arg(QString::fromStdString(profilePath_)).arg(QString::fromStdString(p.username)).arg(QString::fromStdString(p.sipDomain)).arg(QString::fromStdString(p.registrar)).arg(p.dialPrefix.empty()?QStringLiteral("<none>"):QString::fromStdString(p.dialPrefix)).arg(QString::fromStdString(toString(p.transport)).toUpper()).arg(p.useIce?"enabled":"disabled").arg(p.enableSrtp?"enabled":"disabled"));if(useDialPrefix_){const bool has=!p.dialPrefix.empty();useDialPrefix_->setText(has?QString("Use configured dial prefix: %1").arg(QString::fromStdString(p.dialPrefix)):QStringLiteral("Use configured dial prefix (none configured)"));useDialPrefix_->setEnabled(has);if(!has)useDialPrefix_->setChecked(false);}}
     if(activityLog_){QString summary=QString("Registration: %1\nCalls known: %2\n%3\nLog file: %4")
         .arg(QString::fromStdString(engine_.registrationText())).arg((int)engine_.calls().size()).arg(QString::fromStdString(engine_.captureStatus())).arg(QString::fromStdString(trunkmonkey::runtime::logPath().string()));if(activityLog_->toPlainText()!=summary)activityLog_->setPlainText(summary);}
     int keep=pendingSelectId_>=0?pendingSelectId_:selectedCallId();pendingSelectId_=-1;
@@ -160,24 +180,31 @@ void MainWindow::refresh(){
 }
 int MainWindow::selectedCallId()const{auto rows=calls_->selectionModel()->selectedRows();if(rows.isEmpty())return-1;auto*item=calls_->item(rows.first().row(),0);return item?item->text().toInt():-1;}
 void MainWindow::selectCallId(int id){for(int r=0;r<calls_->rowCount();++r){auto*i=calls_->item(r,0);if(i&&i->text().toInt()==id){calls_->selectRow(r);return;}}pendingSelectId_=id;}
-void MainWindow::setDiagnosticsEnabled(bool e){for(auto*w:{sipTraceStart_,sipTraceStop_,sipPcapStart_,rtpPcapStart_,callPcapStart_})if(w)w->setEnabled(e);if(captureInterface_)captureInterface_->setEnabled(e);}
+void MainWindow::setDiagnosticsEnabled(bool e)
+{
+    // SIP packet capture is account/transport-level and intentionally remains
+    // available with no selected call so it can be armed before the INVITE.
+    if(sipPcapStart_) sipPcapStart_->setEnabled(engine_.started());
+    if(captureInterface_) captureInterface_->setEnabled(engine_.started());
+    for(auto*w:{sipTraceStart_,sipTraceStop_,rtpPcapStart_,callPcapStart_}) if(w) w->setEnabled(e);
+}
 void MainWindow::refreshDiagnostics(){
-    int id=selectedCallId();captureStatus_->setText(QString::fromStdString(engine_.captureStatus()));if(id<0){setDiagnosticsEnabled(false);if(muteButton_){muteButton_->setEnabled(false);muteButton_->setText("MUTE MIC");}callIdLabel_->setText("--");mediaTarget_->setText("--");mediaSource_->setText("--");mediaLocal_->setText("--");mediaCodec_->setText("--");if(mediaQuality_)mediaQuality_->setText("--");diagnosticNote_->setText("Select a normal Phone call to view its SIP dialog and media endpoints.");sipLog_->setRowCount(0);rawSip_->clear();displayedTraceCallId_=-1;displayedTraceCount_=0;return;}
+    int id=selectedCallId();captureStatus_->setText(QString::fromStdString(engine_.captureStatus()));if(id<0){setDiagnosticsEnabled(false);if(muteButton_){muteButton_->setEnabled(false);muteButton_->setText("MUTE MIC");}callIdLabel_->setText("--");mediaTarget_->setText("--");mediaSource_->setText("--");mediaLocal_->setText("--");mediaCodec_->setText("--");if(mediaQuality_)mediaQuality_->setText("--");diagnosticNote_->setText("Select a normal Phone call to view its SIP dialog and media endpoints.");sipLog_->setRowCount(0);rawSip_->clear();if(rawSipFlow_)rawSipFlow_->setText("Select a SIP signal above. SENT means S.I.P.H.E.R. transmitted it to the PBX; RECEIVED means it came from the PBX.");displayedTraceCallId_=-1;displayedTraceCount_=0;return;}
     try{
         auto c=engine_.callSnapshot(id);callIdLabel_->setText(showAddr(c.callIdString));mediaTarget_->setText(showAddr(c.remoteRtpAddress));mediaSource_->setText(showAddr(c.sourceRtpAddress));mediaLocal_->setText(showAddr(c.localRtpAddress));
         mediaCodec_->setText(c.codecName.empty()?"--":QString::fromStdString(c.codecName)+(c.codecClockRate?QString(" / %1 Hz").arg(c.codecClockRate):QString{}));
         if(mediaQuality_){const double den=(double)(c.rtpRxPackets+c.rtpRxLoss);const double loss=den>0.0?100.0*c.rtpRxLoss/den:0.0;mediaQuality_->setText(QString("RX %1 pkts | loss %2% | jitter %3 ms | RTT %4 ms | R %5 | MOS %6").arg((qulonglong)c.rtpRxPackets).arg(loss,0,'f',2).arg(c.rxJitterMs,0,'f',1).arg(c.rttMs,0,'f',1).arg(c.estimatedRFactor,0,'f',1).arg(c.estimatedMos,0,'f',2));}
         if(muteButton_){muteButton_->setEnabled(c.purpose==CallPurpose::Phone&&!c.disconnected);muteButton_->setText(c.microphoneMuted?"UNMUTE MIC":"MUTE MIC");}
-        if(c.purpose!=CallPurpose::Phone){setDiagnosticsEnabled(false);diagnosticNote_->setText("Queue-test call selected. 2.0 keeps detailed SIP/RTP trace controls on normal single Phone calls only.");sipLog_->setRowCount(0);rawSip_->clear();displayedTraceCallId_=-1;displayedTraceCount_=0;return;}
+        if(c.purpose!=CallPurpose::Phone){setDiagnosticsEnabled(false);diagnosticNote_->setText("Queue-test call selected. 2.0 keeps detailed SIP/RTP trace controls on normal single Phone calls only.");sipLog_->setRowCount(0);rawSip_->clear();if(rawSipFlow_)rawSipFlow_->setText("Select a SIP signal above. SENT means S.I.P.H.E.R. transmitted it to the PBX; RECEIVED means it came from the PBX.");displayedTraceCallId_=-1;displayedTraceCount_=0;return;}
         setDiagnosticsEnabled(true);auto rec=engine_.sipTraceRecording(id);sipTraceStart_->setEnabled(!rec);sipTraceStop_->setEnabled(rec);diagnosticNote_->setText(rec?QString("Raw SIP trace recording: %1").arg(QString::fromStdString(engine_.sipTracePath(id))):"Live SIP dialog logging active. Later INVITE transactions are labeled RE-INVITE.");
         auto t=engine_.sipTrace(id);if(displayedTraceCallId_!=id||displayedTraceCount_!=t.size()){
-            sipLog_->blockSignals(true);sipLog_->setRowCount((int)t.size());for(int r=0;r<(int)t.size();++r){auto&e=t[(std::size_t)r];QStringList s={QDateTime::fromMSecsSinceEpoch((qint64)e.timestampMs).toString("HH:mm:ss.zzz"),e.direction==SipDirection::Sent?"TX":"RX",QString::fromStdString(e.label),QString::number(e.cseq),e.statusCode?QString::number(e.statusCode):QString{},QString::fromStdString(e.reason)};for(int col=0;col<s.size();++col){auto*i=new QTableWidgetItem(s[col]);if(col==0)i->setData(Qt::UserRole,QString::fromStdString(e.rawMessage));sipLog_->setItem(r,col,i);}}
+            sipLog_->blockSignals(true);sipLog_->setRowCount((int)t.size());for(int r=0;r<(int)t.size();++r){auto&e=t[(std::size_t)r];QStringList s={QDateTime::fromMSecsSinceEpoch((qint64)e.timestampMs).toString("HH:mm:ss.zzz"),e.direction==SipDirection::Sent?"SENT →":"← RECEIVED",QString::fromStdString(e.label),QString::number(e.cseq),e.statusCode?QString::number(e.statusCode):QString{},QString::fromStdString(e.reason)};for(int col=0;col<s.size();++col){auto*i=new QTableWidgetItem(s[col]);if(col==0){i->setData(Qt::UserRole,QString::fromStdString(e.rawMessage));i->setData(Qt::UserRole+1,e.direction==SipDirection::Sent?QStringLiteral("SENT → PBX (TX)"):QStringLiteral("← RECEIVED FROM PBX (RX)"));}sipLog_->setItem(r,col,i);}}
             sipLog_->blockSignals(false);displayedTraceCallId_=id;displayedTraceCount_=t.size();if(!t.empty())sipLog_->scrollToBottom();
         }
     }catch(const std::exception&e){diagnosticNote_->setText(QString("Diagnostics unavailable: %1").arg(e.what()));setDiagnosticsEnabled(false);}
 }
-void MainWindow::showRawSip(){auto rows=sipLog_->selectionModel()->selectedRows();if(rows.isEmpty())return;auto*i=sipLog_->item(rows.first().row(),0);if(i)rawSip_->setPlainText(i->data(Qt::UserRole).toString());}
-void MainWindow::dial(){try{auto d=dialEdit_->text().trimmed();if(d.isEmpty())return;auto id=engine_.makeCall(d.toStdString(),callerIdEdit_->text().trimmed().toStdString(),true,CallPurpose::Phone);pendingSelectId_=id;}catch(const pj::Error&e){QMessageBox::critical(this,"Dial failed",QString::fromStdString(e.info()));}catch(const std::exception&e){QMessageBox::critical(this,"Dial failed",e.what());}}
+void MainWindow::showRawSip(){auto rows=sipLog_->selectionModel()->selectedRows();if(rows.isEmpty())return;auto*i=sipLog_->item(rows.first().row(),0);if(i){rawSip_->setPlainText(i->data(Qt::UserRole).toString());if(rawSipFlow_)rawSipFlow_->setText(i->data(Qt::UserRole+1).toString());}}
+void MainWindow::dial(){try{auto d=dialEdit_->text().trimmed();if(d.isEmpty())return;const bool applyPrefix=useDialPrefix_&&useDialPrefix_->isChecked();const auto effective=engine_.normalizeDestination(d.toStdString(),applyPrefix);auto id=engine_.makeCall(d.toStdString(),callerIdEdit_->text().trimmed().toStdString(),true,CallPurpose::Phone,applyPrefix);pendingSelectId_=id;statusBar()->showMessage(QString("Dialing %1").arg(QString::fromStdString(effective)),5000);}catch(const pj::Error&e){QMessageBox::critical(this,"Dial failed",QString::fromStdString(e.info()));}catch(const std::exception&e){QMessageBox::critical(this,"Dial failed",e.what());}}
 void MainWindow::answerSelected(){try{int id=selectedCallId();if(id>=0)engine_.answer(id);}catch(const pj::Error&e){QMessageBox::warning(this,"Answer",QString::fromStdString(e.info()));}catch(const std::exception&e){QMessageBox::warning(this,"Answer",e.what());}}
 void MainWindow::hangupSelected(){try{int id=selectedCallId();if(id>=0)engine_.hangup(id);}catch(const pj::Error&e){QMessageBox::warning(this,"Hangup",QString::fromStdString(e.info()));}catch(const std::exception&e){QMessageBox::warning(this,"Hangup",e.what());}}
 void MainWindow::foregroundSelected(){try{int id=selectedCallId();if(id>=0)engine_.setForeground(id);}catch(const pj::Error&e){QMessageBox::warning(this,"Foreground",QString::fromStdString(e.info()));}catch(const std::exception&e){QMessageBox::warning(this,"Foreground",e.what());}}
@@ -212,11 +239,31 @@ void MainWindow::showDtmfPad(){
 }
 void MainWindow::startSipTrace(){int id=selectedCallId();if(id<0)return;auto path=QFileDialog::getSaveFileName(this,"Save raw SIP trace",QString("sipher-call-%1-sip.log").arg(id),"Log files (*.log *.txt);;All files (*)");if(path.isEmpty())return;try{engine_.startSipTraceFile(id,path.toStdString());refreshDiagnostics();}catch(const std::exception&e){QMessageBox::warning(this,"SIP trace",e.what());}}
 void MainWindow::stopSipTrace(){int id=selectedCallId();if(id<0)return;try{engine_.stopSipTraceFile(id);refreshDiagnostics();}catch(const std::exception&e){QMessageBox::warning(this,"SIP trace",e.what());}}
-void MainWindow::startSipPcap(){int id=selectedCallId();if(id<0)return;auto path=QFileDialog::getSaveFileName(this,"Save SIP packet capture",QString("sipher-call-%1-sip.pcapng").arg(id),"PCAP files (*.pcap *.pcapng);;All files (*)");if(path.isEmpty())return;try{engine_.startSipPcap(id,path.toStdString(),captureInterface_->currentText().trimmed().toStdString());refreshDiagnostics();}catch(const std::exception&e){QMessageBox::warning(this,"SIP PCAP",e.what());}}
-void MainWindow::startRtpPcap(){int id=selectedCallId();if(id<0)return;auto path=QFileDialog::getSaveFileName(this,"Save RTP packet capture",QString("sipher-call-%1-rtp.pcapng").arg(id),"PCAP files (*.pcap *.pcapng);;All files (*)");if(path.isEmpty())return;try{engine_.startRtpPcap(id,path.toStdString(),captureInterface_->currentText().trimmed().toStdString());lastPcapPath_=path;lastPcapCallId_=id;refreshDiagnostics();}catch(const std::exception&e){QMessageBox::warning(this,"RTP PCAP",e.what());}}
-void MainWindow::startCallPcap(){int id=selectedCallId();if(id<0)return;auto path=QFileDialog::getSaveFileName(this,"Save combined call packet capture",QString("sipher-call-%1-combined.pcapng").arg(id),"PCAP files (*.pcap *.pcapng);;All files (*)");if(path.isEmpty())return;try{engine_.startCallPcap(id,path.toStdString(),captureInterface_->currentText().trimmed().toStdString());lastPcapPath_=path;lastPcapCallId_=id;refreshDiagnostics();}catch(const std::exception&e){QMessageBox::warning(this,"Call PCAP",e.what());}}
+void MainWindow::startSipPcap()
+{
+    const int id=selectedCallId();
+    const QString suggested=id>=0?QString("sipher-call-%1-sip.pcapng").arg(id):QString("sipher-predial-sip-%1.pcapng").arg(QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss"));
+    auto path=QFileDialog::getSaveFileName(this,"Save SIP packet capture (start before dialing)",suggested,"PCAP files (*.pcap *.pcapng);;All files (*)");
+    if(path.isEmpty())return;
+    try{
+        engine_.startSipPcap(path.toStdString(),captureInterface_->currentText().trimmed().toStdString());
+        lastPcapPath_=path;
+        lastPcapCallId_=id;
+        lastPcapIsSip_=true;
+        statusBar()->showMessage("SIP PCAP armed. Dial now; the initial INVITE, prefixed Request-URI, and any 403/401/407 response will be captured.",8000);
+        refreshDiagnostics();
+    }catch(const std::exception&e){QMessageBox::warning(this,"SIP PCAP",e.what());}
+}
+void MainWindow::startRtpPcap(){int id=selectedCallId();if(id<0)return;auto path=QFileDialog::getSaveFileName(this,"Save RTP packet capture",QString("sipher-call-%1-rtp.pcapng").arg(id),"PCAP files (*.pcap *.pcapng);;All files (*)");if(path.isEmpty())return;try{engine_.startRtpPcap(id,path.toStdString(),captureInterface_->currentText().trimmed().toStdString());lastPcapPath_=path;lastPcapCallId_=id;lastPcapIsSip_=false;refreshDiagnostics();}catch(const std::exception&e){QMessageBox::warning(this,"RTP PCAP",e.what());}}
+void MainWindow::startCallPcap(){int id=selectedCallId();if(id<0)return;auto path=QFileDialog::getSaveFileName(this,"Save combined call packet capture",QString("sipher-call-%1-combined.pcapng").arg(id),"PCAP files (*.pcap *.pcapng);;All files (*)");if(path.isEmpty())return;try{engine_.startCallPcap(id,path.toStdString(),captureInterface_->currentText().trimmed().toStdString());lastPcapPath_=path;lastPcapCallId_=id;lastPcapIsSip_=false;refreshDiagnostics();}catch(const std::exception&e){QMessageBox::warning(this,"Call PCAP",e.what());}}
 void MainWindow::stopPcaps(){engine_.stopCaptures();refreshDiagnostics();}
-void MainWindow::openLastPcap(){if(lastPcapPath_.isEmpty()||lastPcapCallId_<0){QMessageBox::information(this,"Wireshark Auto RTP","Start an RTP or combined call PCAP first.");return;}try{engine_.openPcapInWireshark(lastPcapCallId_,lastPcapPath_.toStdString());statusBar()->showMessage("Opened in Wireshark with automatic RTP/RTCP Decode As",5000);}catch(const std::exception&e){QMessageBox::warning(this,"Wireshark Auto RTP",e.what());}}
+void MainWindow::openLastPcap(){
+    if(lastPcapPath_.isEmpty()){QMessageBox::information(this,"Wireshark","Start a SIP, RTP, or combined PCAP first.");return;}
+    try{
+        if(lastPcapIsSip_){engine_.openSipPcapInWireshark(lastPcapPath_.toStdString());statusBar()->showMessage("Opened SIP PCAP in Wireshark with forced SIP Decode As",5000);}
+        else{if(lastPcapCallId_<0)throw std::runtime_error("The selected RTP/combined PCAP no longer has a call context for automatic decode.");engine_.openPcapInWireshark(lastPcapCallId_,lastPcapPath_.toStdString());statusBar()->showMessage("Opened in Wireshark with automatic RTP/RTCP Decode As",5000);}
+    }catch(const std::exception&e){QMessageBox::warning(this,"Wireshark",e.what());}
+}
 void MainWindow::loadDestinations(){destinationFile_=QFileDialog::getOpenFileName(this,"Destination list",{},"Text files (*.txt);;All files (*)");destinationFileLabel_->setText(destinationFile_.isEmpty()?"No destination list loaded":destinationFile_);}
 void MainWindow::loadCallerIds(){callerIdFile_=QFileDialog::getOpenFileName(this,"Caller-ID list",{},"Text files (*.txt);;All files (*)");callerIdFileLabel_->setText(callerIdFile_.isEmpty()?"No caller-ID list loaded":callerIdFile_);}
 void MainWindow::loadQueueAudio(){queueAudioFile_=QFileDialog::getOpenFileName(this,"Queue-test audio",{},"Audio files (*.wav *.mp3 *.flac *.ogg *.m4a);;All files (*)");if(queueAudioFileLabel_)queueAudioFileLabel_->setText(queueAudioFile_.isEmpty()?"Live/no injected audio":queueAudioFile_);}
@@ -225,7 +272,7 @@ void MainWindow::hangupAll(){engine_.hangupAll();}
 void MainWindow::showSipLadder(){int id=selectedCallId();if(id<0)return;try{QMessageBox box(this);box.setWindowTitle(QString("SIP Ladder — Call %1").arg(id));box.setTextFormat(Qt::PlainText);box.setText(QString::fromStdString(engine_.sipLadder(id)));box.setStandardButtons(QMessageBox::Ok);box.exec();}catch(const std::exception&e){QMessageBox::warning(this,"SIP ladder",e.what());}}
 void MainWindow::exportCallReport(){int id=selectedCallId();if(id<0)return;auto path=QFileDialog::getSaveFileName(this,"Export call diagnostic report",QString("sipher-call-%1-report.txt").arg(id),"Text reports (*.txt);;All files (*)");if(path.isEmpty())return;try{engine_.exportCallReport(id,path.toStdString());statusBar()->showMessage("Call report exported",5000);}catch(const std::exception&e){QMessageBox::warning(this,"Call report",e.what());}}
 
-void MainWindow::showAudioDevices(){try{const auto devices=engine_.audioDevices();if(devices.empty()){QMessageBox::information(this,"Audio Devices","No PJSIP audio devices are available.");return;}QDialog d(this);d.setWindowTitle("Audio Devices");auto*layout=new QVBoxLayout(&d);auto*form=new QFormLayout;auto*capture=new QComboBox;auto*playback=new QComboBox;for(const auto&dev:devices){const auto label=QString("[%1] %2 / %3").arg(dev.id).arg(QString::fromStdString(dev.driver)).arg(QString::fromStdString(dev.name));if(dev.inputCount>0){capture->addItem(label,dev.id);if(dev.id==engine_.activeCaptureDevice())capture->setCurrentIndex(capture->count()-1);}if(dev.outputCount>0){playback->addItem(label,dev.id);if(dev.id==engine_.activePlaybackDevice())playback->setCurrentIndex(playback->count()-1);}}form->addRow("Microphone",capture);form->addRow("Playback",playback);layout->addLayout(form);auto*hint=new QLabel("Capture and playback are independent. S.I.P.H.E.R. keeps the verified FreeBSD headset-mic auto-routing, but these controls let you override it when using USB/HDMI/other devices.");hint->setWordWrap(true);layout->addWidget(hint);auto*buttons=new QGridLayout;auto*apply=new QPushButton("APPLY");auto*cancel=new QPushButton("CANCEL");buttons->addWidget(apply,0,0);buttons->addWidget(cancel,0,1);layout->addLayout(buttons);connect(cancel,&QPushButton::clicked,&d,&QDialog::reject);connect(apply,&QPushButton::clicked,&d,[&](){engine_.selectAudioDevices(capture->currentData().toInt(),playback->currentData().toInt());d.accept();});d.exec();}catch(const pj::Error&e){QMessageBox::warning(this,"Audio Devices",QString::fromStdString(e.info()));}catch(const std::exception&e){QMessageBox::warning(this,"Audio Devices",e.what());}}
+void MainWindow::showAudioDevices(){try{const auto devices=engine_.audioDevices();if(devices.empty()){QMessageBox::information(this,"Audio Devices","No PJSIP audio devices are available.");return;}QDialog d(this);d.setWindowTitle("Audio Devices");auto*layout=new QVBoxLayout(&d);auto*form=new QFormLayout;auto*capture=new QComboBox;auto*playback=new QComboBox;for(const auto&dev:devices){const auto label=QString("[%1] %2 / %3").arg(dev.id).arg(QString::fromStdString(dev.driver)).arg(QString::fromStdString(dev.name));if(dev.inputCount>0){capture->addItem(label,dev.id);if(dev.id==engine_.activeCaptureDevice())capture->setCurrentIndex(capture->count()-1);}if(dev.outputCount>0){playback->addItem(label,dev.id);if(dev.id==engine_.activePlaybackDevice())playback->setCurrentIndex(playback->count()-1);}}form->addRow("Microphone",capture);form->addRow("Playback",playback);layout->addLayout(form);auto*hint=new QLabel("Capture and playback are independent. Applying a change performs a real PJSIP close/refresh/reopen and reattaches the foreground call. Linux follows PipeWire/PulseAudio. FreeBSD follows PulseAudio when present, otherwise native OSS/snd_hda default-unit, PCM and recording-source changes.");hint->setWordWrap(true);layout->addWidget(hint);auto*buttons=new QGridLayout;auto*apply=new QPushButton("APPLY");auto*cancel=new QPushButton("CANCEL");buttons->addWidget(apply,0,0);buttons->addWidget(cancel,0,1);layout->addLayout(buttons);connect(cancel,&QPushButton::clicked,&d,&QDialog::reject);connect(apply,&QPushButton::clicked,&d,[&](){engine_.selectAudioDevices(capture->currentData().toInt(),playback->currentData().toInt());d.accept();});d.exec();}catch(const pj::Error&e){QMessageBox::warning(this,"Audio Devices",QString::fromStdString(e.info()));}catch(const std::exception&e){QMessageBox::warning(this,"Audio Devices",e.what());}}
 
 void MainWindow::showAudioOutput()
 {
@@ -253,7 +300,7 @@ void MainWindow::showAudioOutput()
         }
         form->addRow("Output device",playback);
         layout->addLayout(form);
-        auto* hint=new QLabel("Changes only the call playback/output device. Your current microphone/capture device is left unchanged. On Unix/Linux this can be used to move call audio between speakers, USB headsets, HDMI/DisplayPort audio, and other PJSIP-visible outputs.");
+        auto* hint=new QLabel("Changes only playback/output; the microphone is left unchanged. S.I.P.H.E.R. now closes and reopens PJSIP audio after selection so the change affects an already-open call stream. On Linux, ALSA / pipewire is the preferred desktop route.");
         hint->setWordWrap(true);
         layout->addWidget(hint);
         auto* buttons=new QGridLayout;
@@ -265,7 +312,7 @@ void MainWindow::showAudioOutput()
         connect(apply,&QPushButton::clicked,&d,[&](){
             const int id=playback->currentData().toInt();
             engine_.selectPlaybackDevice(id);
-            statusBar()->showMessage(QString("Audio output changed to device %1").arg(id),5000);
+            statusBar()->showMessage(QString("Audio output changed to device %1 and PJSIP sound device reopened").arg(id),5000);
             d.accept();
         });
         d.exec();
@@ -275,6 +322,35 @@ void MainWindow::showAudioOutput()
         QMessageBox::warning(this,"Audio Output",e.what());
     }
 }
+void MainWindow::reopenAudio()
+{
+    try{
+        engine_.refreshAudioDevices();
+        const auto st=engine_.audioStatus();
+        statusBar()->showMessage(QString("Audio reopened: capture %1, playback %2, sound %3")
+            .arg(st.captureId).arg(st.playbackId).arg(st.soundActive?"ACTIVE":"INACTIVE"),6000);
+        if(!st.soundActive) QMessageBox::warning(this,"Audio Reopen","PJSIP completed the reopen but did not report an active sound device. Check the Engine Log for the exact media error.");
+    }catch(const pj::Error& e){QMessageBox::warning(this,"Audio Reopen",QString::fromStdString(e.info()));}
+    catch(const std::exception& e){QMessageBox::warning(this,"Audio Reopen",e.what());}
+}
+
+void MainWindow::showAudioStatus()
+{
+    try{
+        const auto st=engine_.audioStatus();
+        QString text=QString("Capture: %1\nPlayback: %2\nPJSIP sound active: %3\nAutomatic switching: %4\nHot-plug watch: %5")
+            .arg(QString::fromStdString(st.captureDevice))
+            .arg(QString::fromStdString(st.playbackDevice))
+            .arg(st.soundActive?"YES":"NO")
+            .arg(st.autoSwitchEnabled?"ON":"OFF")
+            .arg(st.hotplugWatchAvailable?"AVAILABLE":"UNAVAILABLE");
+        if(!st.hotplugBackend.empty())text+=QString("\nWatcher backend: %1").arg(QString::fromStdString(st.hotplugBackend));
+        if(!st.systemRoute.empty())text+=QString("\nSystem route: %1").arg(QString::fromStdString(st.systemRoute));
+        QMessageBox::information(this,"Audio Status",text);
+    }catch(const pj::Error& e){QMessageBox::warning(this,"Audio Status",QString::fromStdString(e.info()));}
+    catch(const std::exception& e){QMessageBox::warning(this,"Audio Status",e.what());}
+}
+
 void MainWindow::showRegistrationHistory(){std::ostringstream out;for(const auto&line:engine_.registrationHistory())out<<line<<"\n";QMessageBox box(this);box.setWindowTitle("Registration History");box.setTextFormat(Qt::PlainText);box.setText(QString::fromStdString(out.str().empty()?std::string("No registration state changes recorded yet."):out.str()));box.exec();}
 
 static AuditTransport guiAuditTransport(QComboBox* box){return PbxAudit::transportFromString(box?box->currentData().toString().toStdString():"udp");}

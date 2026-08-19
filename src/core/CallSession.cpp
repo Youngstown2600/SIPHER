@@ -381,7 +381,7 @@ std::string CallSession::formatTraceEntry(const SipTraceEntry& entry)
     std::ostringstream out;
     out << std::put_time(&tm, "%Y-%m-%d %H:%M:%S") << "."
         << std::setfill('0') << std::setw(3) << (entry.timestampMs % 1000)
-        << " [" << (entry.direction == SipDirection::Sent ? "TX" : "RX") << "] "
+        << " [" << (entry.direction == SipDirection::Sent ? "SENT ->" : "<- RECEIVED") << "] "
         << entry.label << " CSeq=" << entry.cseq << " Call-ID=" << entry.callIdString << "\n";
     out << entry.rawMessage;
     if (entry.rawMessage.empty() || entry.rawMessage.back() != '\n') {

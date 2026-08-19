@@ -1,31 +1,22 @@
-S.I.P.H.E.R. 1.0.0 r8 — Linux / FreeBSD release
+S.I.P.H.E.R. 1.0.0 r12 — Linux / FreeBSD live audio hot-swap release
 
-Base core: TrunkMonkey 2.0.0 Unix r20
+Base: r11 audio lifecycle + r10 dial-prefix/SIP-capture updates
 
-r8 additions:
-- FreeBSD pthread link fix for the CaptureManager regression target.
-- Automated chained PBX/SIP audit with prioritized report and remediation.
-- GUI/CLI guided audit workflow and progress feedback.
-- Unified Windows/Unix PBX audit core and Windows Winsock support.
-- Additional posture checks: banner/version disclosure, method surface, cleartext transport exposure, TLS legacy indicators, and correlated audit evidence.
-
-r7 additions:
-- Automatic Wireshark RTP/RTCP Decode As launch for captured calls
-- GUI: OPEN LAST PCAP (AUTO RTP)
-- CLI: pcap-open <id> <file>
-- Targeted dynamic RTP/RTCP port mapping with rtp_udp heuristic fallback
-- Standard PCAP/PCAPNG output remains unchanged and portable
+r12 additions:
+- Automatic headset/system-audio following on Linux and FreeBSD.
+- Linux: PipeWire/PulseAudio sink/source/active-port watcher.
+- FreeBSD: combined PulseAudio + native OSS/snd_hda watcher; tracks hw.snd.default_auto, hw.snd.default_unit, /dev/sndstat PCM inventory, and active mixer recording source.
+- Live route changes use PJSIP detach -> setNoDev -> refreshDevs -> setSndDevMode -> reattach without dropping the SIP dialog.
+- CLI `audio-auto on|off` and GUI automatic-follow toggle; enabled by default.
+- Removed-device fallback uses PJSIP system defaults instead of stale refreshed indexes.
+- Fixes CLI raw-SIP title string concatenation compile error carried from prior revisions.
 
 Retained feature set:
-- C++17/PJSUA2 SIP core and Qt GUI
-- Queue/blast engine and audio injection
-- SIP/RTP/combined packet capture
-- RTP quality statistics, SIP ladder, call reports, registration history
-- Independent audio-device selection
-- Linux/FreeBSD capture permission setup
-- Bounded PBX audit suite
-- 26 CLI/GUI themes
-- S.I.P.H.E.R. By GITSC branding
+- Dial prefix support and exact outbound SENT / inbound RECEIVED SIP views.
+- Pre-dial SIP PCAP capture and Wireshark SIP/RTP decode helpers.
+- Independent audio input/output selection and manual reopen/refresh controls.
+- Queue/blast testing, RTP diagnostics, SIP ladder, reports, themes, and bounded PBX audit suite.
+- Linux/FreeBSD builder, capture permissions, and verified Project-2501 ALC236 repair path.
 
 Builder:
   ./build.sh

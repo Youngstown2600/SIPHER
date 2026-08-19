@@ -8,6 +8,7 @@ password=1
 display_name=1
 outbound_proxy=1
 caller_id_domain=1
+dial_prefix=
 stun_server=
 transport=udp
 identity_mode=from

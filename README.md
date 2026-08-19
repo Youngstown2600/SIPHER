@@ -1,5 +1,12 @@
 # S.I.P.H.E.R. 1.0.0 — Linux / FreeBSD
 
+## r12 live headset/device switching
+
+r12 adds default-on automatic local audio rerouting during an active SIP call. Linux follows PipeWire/PulseAudio sink/source port changes. FreeBSD combines PulseAudio state (when present) with native OSS/snd_hda state (`hw.snd.default_auto`, `hw.snd.default_unit`, `/dev/sndstat`, and the mixer recording source). When the route changes, S.I.P.H.E.R. keeps the SIP/RTP call up while it detaches the foreground AudioMedia, closes and refreshes PJSIP audio, reopens the selected/default devices, verifies the sound device is active, and reattaches the call.
+
+Use `audio-auto on|off`, `audio-status`, and `audio-reopen` from the CLI. The GUI exposes **Automatically Follow Headset / System Audio** plus Audio Status and Reopen/Refresh actions.
+
+
 S.I.P.H.E.R. is a usability-first repackaging of the proven TrunkMonkey 2.0 r20 core. **No features were removed.** The goal of S.I.P.H.E.R. 1.0 is to make the same softphone, diagnostics, queue testing, packet capture, audio routing, themes, and bounded PBX audit tools usable by a Tier-1 NOC technician without requiring them to memorize commands.
 
 ## S.I.P.H.E.R. 1.0 r5 highlights

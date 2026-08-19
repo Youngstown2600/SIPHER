@@ -15,6 +15,7 @@
 #include <climits>
 #include <ctime>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -200,6 +201,7 @@ bool editProfileInteractive(SipProfile& p,const std::filesystem::path& path)
         p.displayName=promptValue("Display name",p.displayName);
         p.outboundProxy=promptValue("Outbound proxy",p.outboundProxy);
         p.callerIdDomain=promptValue("Caller-ID domain",p.callerIdDomain);
+        p.dialPrefix=promptValue("Dial prefix (optional; e.g. 9 or 4071)",p.dialPrefix);
         for(;;){
             try{p.transport=transportFromString(promptValue("Transport (udp/tcp/tls)",toString(p.transport)));break;}
             catch(const std::exception& error){std::cerr<<error.what()<<'\n';}
@@ -230,7 +232,7 @@ std::string profileText(const SipProfile& p,const std::filesystem::path& path)
        <<"  name="<<p.name<<"\n  sip_domain="<<p.sipDomain<<"\n  registrar="<<p.registrar
        <<"\n  username="<<p.username<<"\n  auth_username="<<p.authUsername
        <<"\n  password="<<(p.password.empty()?"<empty>":"<saved>")<<"\n  display_name="<<p.displayName
-       <<"\n  outbound_proxy="<<p.outboundProxy<<"\n  caller_id_domain="<<p.callerIdDomain
+       <<"\n  outbound_proxy="<<p.outboundProxy<<"\n  caller_id_domain="<<p.callerIdDomain<<"\n  dial_prefix="<<(p.dialPrefix.empty()?"<none>":p.dialPrefix)
        <<"\n  transport="<<toString(p.transport)<<"\n  local_sip_port="<<p.localSipPort
        <<"\n  registration_expires="<<p.registrationExpires<<"\n  identity_mode="<<toString(p.identityMode)
        <<"\n  stun_server="<<p.stunServer<<"\n  use_ice="<<(p.useIce?"true":"false")
@@ -267,22 +269,27 @@ Call slash commands:
 
 Advanced Commands:
  status | calls | refresh
- profile-show | profile-edit | profile-reload
- dial <dest> [cid]
+ profile-show | profile-edit | profile-reload    (profile includes optional dial_prefix)
+ dial <dest> [cid]               configured dial_prefix is prepended to plain numbers
+ dial-raw <dest> [cid]           bypass configured dial_prefix for this call
+ dial-preview <dest>             show exact Request-URI target before placing a call
  answer <id> | reject <id> [code] | hangup <id> | hangup-all
  foreground <id> | foreground-none
  hold <id> | resume <id> | mute <id> | unmute <id> | dtmf <id> <digits>
  media <id> | stats <id> | ladder <id>
- audio-devices | audio-output <playback-id> | audio-use <capture-id> <playback-id> | reg-history
+ audio-devices | audio-status | audio-reopen | audio-refresh | audio-auto <on|off>
+ audio-output <playback-id> | audio-use <capture-id> <playback-id> | reg-history
  report <id> [file]            show or export a call diagnostic report
  siplog <id>                   select call and show live SIP signals in dashboard
  sipraw <id> <index>           full raw SIP message from siplog
  siptrace-start <id> <file>    write full SIP messages to a text trace
  siptrace-stop <id>
- sipcap-start <id> <file> [interface]
+ sipcap-start <file> [interface]      start SIP PCAP BEFORE dialing (captures prefixed INVITE + 403/401/407 responses)
+ sipcap-start <id> <file> [interface] legacy form; call ID is accepted but not required
  rtpcap-start <id> <file> [interface]
  callcap-start <id> <file> [interface]   combined SIP+RTP/RTCP for an active call
  capture-stop [sip|rtp|call|all] | capture-status | capture-ifaces
+ sipcap-open <file>               open SIP PCAP in Wireshark with forced SIP decode on local SIP port
  pcap-open <id> <file>            open in Wireshark with RTP/RTCP auto-decoded
  pjsiplog | log-up [n] | log-down [n] | log-tail   (PgUp/PgDn also scroll Engine Log)
  themes | theme <name>
@@ -374,12 +381,12 @@ std::string sipLogText(const SipEngine& engine,int id)
 {
     const auto trace=engine.sipTrace(id);
     std::ostringstream out;
-    out<<"IDX TIME         DIR CSEQ     SIGNAL                         CODE REASON\n"
+    out<<"IDX TIME         FLOW        CSEQ     SIGNAL                         CODE REASON\n"
          "--------------------------------------------------------------------------------\n";
     for(std::size_t i=0;i<trace.size();++i){
         const auto& entry=trace[i];
         out<<std::setw(3)<<i<<" "<<stamp(entry.timestampMs)<<" "
-           <<(entry.direction==SipDirection::Sent?"TX ":"RX ")
+           <<(entry.direction==SipDirection::Sent?"SENT ->    ":"<- RECEIVED ")
            <<std::setw(8)<<entry.cseq<<" "
            <<std::setw(30)<<std::left<<entry.label<<std::right<<" "
            <<std::setw(4)<<entry.statusCode<<" "<<entry.reason<<'\n';
@@ -457,7 +464,13 @@ std::string guidedOperatorWorkflow(CliDashboard& dashboard,const SipEngine& engi
         const auto destination=askOperator("Destination (number or SIP URI)");
         if(destination.empty()) return {};
         const auto cid=askOperator("Caller ID (optional)");
-        return "dial "+commandArg(destination)+(cid.empty()?std::string{}:" "+commandArg(cid));
+        bool usePrefix=!engine.profile().dialPrefix.empty();
+        if(!engine.profile().dialPrefix.empty()){
+            const auto answer=askOperator("Use PBX dial prefix '"+engine.profile().dialPrefix+"'? (Y/n)","Y");
+            usePrefix=!(answer=="n"||answer=="N"||answer=="no"||answer=="NO");
+            try{std::cout<<"Wire target: "<<engine.normalizeDestination(destination,usePrefix)<<"\n";}catch(...){}
+        }
+        return std::string(usePrefix?"dial ":"dial-raw ")+commandArg(destination)+(cid.empty()?std::string{}:" "+commandArg(cid));
     }
 
     if(category==2){
@@ -499,19 +512,25 @@ std::string guidedOperatorWorkflow(CliDashboard& dashboard,const SipEngine& engi
     }
 
     if(category==4){
-        std::cout<<"\nCALL DIAGNOSTICS\n----------------\n"<<callsText(engine)<<"\n";
-        const auto id=askOperator("Call ID");if(id.empty())return{};
+        std::cout<<"\nCALL DIAGNOSTICS\n----------------\n";
         const int action=askOperatorChoice("Diagnostic action",{
-            "Media / RTP summary","Detailed PJSIP media statistics","SIP ladder","Live SIP message view","Combined SIP + RTP PCAP","SIP-only PCAP","RTP-only PCAP","Export diagnostic report"
+            "START PRE-DIAL SIP PCAP (captures initial INVITE + 401/407 retry)","Media / RTP summary","Detailed PJSIP media statistics","SIP ladder","Live SIP message view","Combined SIP + RTP PCAP","SIP-only PCAP for selected call","RTP-only PCAP","Export diagnostic report"
         });
         if(action==0)return{};
-        if(action==1) return "media "+id;
-        if(action==2) return "stats "+id;
-        if(action==3) return "ladder "+id;
-        if(action==4) return "siplog "+id;
-        if(action>=5&&action<=7){
-            const std::string type=action==5?"callcap-start":action==6?"sipcap-start":"rtpcap-start";
-            const std::string suffix=action==5?"call":action==6?"sip":"rtp";
+        if(action==1){
+            const auto path=askOperator("Capture file","/tmp/sipher-predial-sip.pcapng");
+            const auto iface=askOperator("Capture interface","any");
+            return "sipcap-start "+commandArg(path)+" "+commandArg(iface);
+        }
+        std::cout<<"\n"<<callsText(engine)<<"\n";
+        const auto id=askOperator("Call ID");if(id.empty())return{};
+        if(action==2) return "media "+id;
+        if(action==3) return "stats "+id;
+        if(action==4) return "ladder "+id;
+        if(action==5) return "siplog "+id;
+        if(action>=6&&action<=8){
+            const std::string type=action==6?"callcap-start":action==7?"sipcap-start":"rtpcap-start";
+            const std::string suffix=action==6?"call":action==7?"sip":"rtp";
             const auto path=askOperator("Capture file","/tmp/sipher-call-"+id+"-"+suffix+".pcapng");
             const auto iface=askOperator("Capture interface","any");
             return type+" "+id+" "+commandArg(path)+" "+commandArg(iface);
@@ -556,9 +575,13 @@ std::string guidedOperatorWorkflow(CliDashboard& dashboard,const SipEngine& engi
     }
 
     if(category==6){
-        const int action=askOperatorChoice("AUDIO & REGISTRATION",{"Show audio devices","Choose audio output device","Choose microphone and playback device","Registration history"});
+        const int action=askOperatorChoice("AUDIO & REGISTRATION",{"Show audio devices","Audio status / active route","Toggle automatic headset/device switching","Reopen audio now (headset/speaker recovery)","Refresh/reopen audio devices","Choose audio output device","Choose microphone and playback device","Registration history"});
         if(action==1) return "audio-devices";
-        if(action==2){
+        if(action==2) return "audio-status";
+        if(action==3) return std::string("audio-auto ")+(engine.audioAutoSwitchEnabled()?"off":"on");
+        if(action==4) return "audio-reopen";
+        if(action==5) return "audio-refresh";
+        if(action==6){
             std::cout<<"\nPLAYBACK / OUTPUT DEVICES\n-------------------------\n";
             const int active=engine.activePlaybackDevice();
             for(const auto& d:engine.audioDevices()){
@@ -569,12 +592,12 @@ std::string guidedOperatorWorkflow(CliDashboard& dashboard,const SipEngine& engi
             const auto p=askOperator("Playback / output device ID",active>=0?std::to_string(active):std::string{});
             return p.empty()?std::string{}:"audio-output "+p;
         }
-        if(action==3){
+        if(action==7){
             const auto c=askOperator("Capture / microphone device ID");
             const auto p=askOperator("Playback device ID");
             return(c.empty()||p.empty())?std::string{}:"audio-use "+c+" "+p;
         }
-        if(action==4) return "reg-history";
+        if(action==8) return "reg-history";
         return {};
     }
     if(category==7){
@@ -608,7 +631,7 @@ volatile sig_atomic_t gTerminalResized=0;
 void onTerminalResize(int){gTerminalResized=1;}
 #endif
 
-bool readInteractiveCommand(bool dashboardEnabled,std::string& line,int& altPage)
+bool readInteractiveCommand(bool dashboardEnabled,std::string& line,int& altPage,const std::function<void()>& idleTick={})
 {
     altPage=0;
     if(!dashboardEnabled) return static_cast<bool>(std::getline(std::cin,line));
@@ -620,6 +643,9 @@ bool readInteractiveCommand(bool dashboardEnabled,std::string& line,int& altPage
     struct RestoreConsole{HANDLE h;DWORD mode;~RestoreConsole(){SetConsoleMode(h,mode);}} restore{input,oldMode};
     line=gPendingInput;if(!line.empty())std::cout<<line<<std::flush;
     for(;;){
+        const DWORD wait=WaitForSingleObject(input,250);
+        if(wait==WAIT_TIMEOUT){if(idleTick)idleTick();continue;}
+        if(wait!=WAIT_OBJECT_0)return false;
         INPUT_RECORD rec{};DWORD count=0;if(!ReadConsoleInputA(input,&rec,1,&count)||count==0)return false;
         if(rec.EventType==WINDOW_BUFFER_SIZE_EVENT){gPendingInput=line;line="__resize__";return true;}
         if(rec.EventType!=KEY_EVENT||!rec.Event.KeyEvent.bKeyDown)continue;
@@ -648,7 +674,7 @@ bool readInteractiveCommand(bool dashboardEnabled,std::string& line,int& altPage
         pollfd pfd{STDIN_FILENO,POLLIN,0};
         const int prc=::poll(&pfd,1,250);
         if(prc<0){if(errno==EINTR)continue;return false;}
-        if(prc==0)continue;
+        if(prc==0){if(idleTick)idleTick();continue;}
         unsigned char ch=0;const auto n=::read(STDIN_FILENO,&ch,1);
         if(n<=0) return false;
         if(ch==0x1b){
@@ -767,7 +793,9 @@ int main(int argc,char** argv)
         if(dashboard.enabled()) dashboard.render(makeDashboardState(),std::cout);
         else std::cout<<"sipher> "<<std::flush;
         int altPage=0;
-        if(!readInteractiveCommand(dashboard.enabled(),line,altPage)) break;
+        if(!readInteractiveCommand(dashboard.enabled(),line,altPage,[&](){
+            try{if(engine.pollSystemAudioRoute()) addNotice("Audio route changed; PJSIP sound device reopened and foreground call reattached.",DashboardNotice::Level::Success);}catch(const std::exception& e){addNotice(std::string("Audio hot-plug reopen failed: ")+e.what(),DashboardNotice::Level::Warning);}
+        })) break;
         if(line=="__resize__") continue;
         if(altPage>=1 && altPage<=9){currentPage=static_cast<DashboardPage>(altPage);continue;}
 
@@ -880,12 +908,23 @@ int main(int argc,char** argv)
                     try{engine.stop();engine.start(oldProfile,kMaxCalls);}catch(...){}
                     throw;
                 }
-            }else if(cmd=="dial"){
+            }else if(cmd=="dial" || cmd=="dial-raw"){
                 std::string destination,callerId;
                 destination=readArg(in);callerId=readArg(in);
                 if(destination.empty()) throw std::runtime_error("destination required");
-                focusCallId=engine.makeCall(destination,callerId,true,CallPurpose::Phone);
-                addNotice("Outgoing call started: ID "+std::to_string(focusCallId)+" -> "+destination,DashboardNotice::Level::Success);
+                const bool applyPrefix=(cmd=="dial");
+                const auto effective=engine.normalizeDestination(destination,applyPrefix);
+                focusCallId=engine.makeCall(destination,callerId,true,CallPurpose::Phone,applyPrefix);
+                addNotice("Outgoing call started: ID "+std::to_string(focusCallId)+" -> "+effective+(applyPrefix?"":" (prefix bypassed)"),DashboardNotice::Level::Success);
+            }else if(cmd=="dial-preview"){
+                const auto destination=readArg(in);
+                if(destination.empty()) throw std::runtime_error("destination required");
+                const auto effective=engine.normalizeDestination(destination,true);
+                std::ostringstream out;
+                out<<"Entered destination: "<<destination<<"\n"
+                   <<"Configured PBX prefix: "<<(engine.profile().dialPrefix.empty()?"<none>":engine.profile().dialPrefix)<<"\n"
+                   <<"SIP Request-URI target: "<<effective<<"\n";
+                dashboard.showOverlay("DIAL PREVIEW",out.str(),std::cout);dashboard.pauseForEnter(std::cin,std::cout);
             }else if(cmd=="answer"){
                 const int id=requireCallId(in);engine.answer(id);focusCallId=id;
                 addNotice("Answered call "+std::to_string(id)+".",DashboardNotice::Level::Success);
@@ -928,16 +967,36 @@ int main(int argc,char** argv)
                 engine.sendDtmf(id,digits);focusCallId=id;
                 addNotice("DTMF sent on call "+std::to_string(id)+": "+digits);
             }else if(cmd=="audio-devices"){
-                std::ostringstream out;out<<"Active capture ID: "<<engine.activeCaptureDevice()<<"\nActive playback ID: "<<engine.activePlaybackDevice()<<"\n\n";
+                const auto st=engine.audioStatus();
+                std::ostringstream out;out<<"Active capture ID: "<<st.captureId<<"\nActive playback ID: "<<st.playbackId<<"\nSound device active: "<<(st.soundActive?"YES":"NO")<<"\n";
+                if(!st.systemRoute.empty())out<<"System route: "<<st.systemRoute<<"\n";
+                out<<"\n";
                 for(const auto&d:engine.audioDevices())out<<"["<<d.id<<"] "<<d.driver<<" / "<<d.name<<"  inputs="<<d.inputCount<<" outputs="<<d.outputCount<<"\n";
                 dashboard.showOverlay("AUDIO DEVICES",out.str(),std::cout);dashboard.pauseForEnter(std::cin,std::cout);
+            }else if(cmd=="audio-status"){
+                const auto st=engine.audioStatus();std::ostringstream out;
+                out<<"Capture: "<<st.captureDevice<<"\nPlayback: "<<st.playbackDevice<<"\nPJSIP sound active: "<<(st.soundActive?"YES":"NO")<<"\n";
+                out<<"Automatic switching: "<<(st.autoSwitchEnabled?"ON":"OFF")<<"\n";
+                out<<"Hot-plug watch: "<<(st.hotplugWatchAvailable?"AVAILABLE":"UNAVAILABLE")<<"\n";
+                if(!st.hotplugBackend.empty())out<<"Watcher backend: "<<st.hotplugBackend<<"\n";
+                if(!st.systemRoute.empty())out<<"System route: "<<st.systemRoute<<"\n";
+                dashboard.showOverlay("AUDIO STATUS",out.str(),std::cout);dashboard.pauseForEnter(std::cin,std::cout);
+            }else if(cmd=="audio-auto"){
+                std::string value=readArg(in);std::transform(value.begin(),value.end(),value.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
+                if(value!="on" && value!="off")throw std::runtime_error("audio-auto requires on or off");
+                engine.setAudioAutoSwitch(value=="on");
+                addNotice(std::string("Automatic headset/device switching ")+(value=="on"?"enabled":"disabled")+".",value=="on"?DashboardNotice::Level::Success:DashboardNotice::Level::Warning);
+            }else if(cmd=="audio-reopen" || cmd=="audio-refresh"){
+                if(cmd=="audio-refresh")engine.refreshAudioDevices();else engine.reopenAudioDevices();
+                const auto st=engine.audioStatus();
+                addNotice(std::string("Audio ")+(cmd=="audio-refresh"?"refreshed/reopened":"reopened")+": capture="+std::to_string(st.captureId)+" playback="+std::to_string(st.playbackId)+" sound="+(st.soundActive?"ACTIVE":"INACTIVE"),st.soundActive?DashboardNotice::Level::Success:DashboardNotice::Level::Warning);
             }else if(cmd=="audio-output"){
                 int playback=-1;if(!(in>>playback))throw std::runtime_error("audio-output requires playback-id");
                 engine.selectPlaybackDevice(playback);
-                addNotice("Audio output selected: playback="+std::to_string(playback)+" (microphone unchanged)",DashboardNotice::Level::Success);
+                addNotice("Audio output selected and PJSIP sound device reopened: playback="+std::to_string(playback)+" (microphone unchanged)",DashboardNotice::Level::Success);
             }else if(cmd=="audio-use"){
                 int capture=-1,playback=-1;if(!(in>>capture>>playback))throw std::runtime_error("audio-use requires capture-id and playback-id");engine.selectAudioDevices(capture,playback);
-                addNotice("Audio devices selected: capture="+std::to_string(capture)+" playback="+std::to_string(playback),DashboardNotice::Level::Success);
+                addNotice("Audio devices selected and reopened: capture="+std::to_string(capture)+" playback="+std::to_string(playback),DashboardNotice::Level::Success);
             }else if(cmd=="reg-history"){
                 std::ostringstream out;for(const auto&line:engine.registrationHistory())out<<line<<"\n";if(out.str().empty())out<<"No registration state changes recorded yet.\n";dashboard.showOverlay("REGISTRATION HISTORY",out.str(),std::cout);dashboard.pauseForEnter(std::cin,std::cout);
             }else if(cmd=="media"){
@@ -958,7 +1017,8 @@ int main(int argc,char** argv)
                 const auto trace=engine.sipTrace(id);
                 if(index>=trace.size()) throw std::runtime_error("SIP log index out of range");
                 focusCallId=id;
-                dashboard.showOverlay("RAW SIP — CALL "+std::to_string(id)+" ENTRY "+std::to_string(index),trace[index].rawMessage,std::cout);
+                const std::string flow=trace[index].direction==SipDirection::Sent?"SENT TO PBX (TX)":"RECEIVED FROM PBX (RX)";
+                dashboard.showOverlay("RAW SIP — "+flow+" — CALL "+std::to_string(id)+" ENTRY "+std::to_string(index),trace[index].rawMessage,std::cout);
                 dashboard.pauseForEnter(std::cin,std::cout);
             }else if(cmd=="siptrace-start"){
                 const int id=requireCallId(in);std::string path=readArg(in);
@@ -968,13 +1028,32 @@ int main(int argc,char** argv)
             }else if(cmd=="siptrace-stop"){
                 const int id=requireCallId(in);engine.stopSipTraceFile(id);focusCallId=id;
                 addNotice("Raw SIP trace stopped for call "+std::to_string(id)+".");
-            }else if(cmd=="sipcap-start" || cmd=="rtpcap-start" || cmd=="callcap-start"){
+            }else if(cmd=="sipcap-start"){
+                // SIP capture is intentionally startable before any call exists.
+                // Accept both the preferred form: sipcap-start <file> [iface]
+                // and the older form: sipcap-start <id> <file> [iface].
+                std::string first=readArg(in);
+                if(first.empty()) throw std::runtime_error("sipcap-start requires a pcap file path");
+                std::string path,iface="any";
+                bool legacyId=false;int legacyCallId=-1;
+                try{std::size_t used=0;long long n=std::stoll(first,&used,10);if(used==first.size()&&n>=0&&n<=INT_MAX){legacyId=true;legacyCallId=static_cast<int>(n);}}catch(...){}
+                if(legacyId){
+                    path=readArg(in);
+                    if(path.empty()) throw std::runtime_error("legacy sipcap-start <id> form requires a pcap file path");
+                    in>>std::ws;if(!in.eof()) iface=readArg(in);
+                    engine.startSipPcap(legacyCallId,path,iface);focusCallId=legacyCallId;
+                }else{
+                    path=first;in>>std::ws;if(!in.eof()) iface=readArg(in);
+                    engine.startSipPcap(path,iface);
+                }
+                addNotice("SIP PCAP armed BEFORE DIAL: "+path+" — place the call now to capture the exact prefixed INVITE and PBX response.",DashboardNotice::Level::Success);
+            }else if(cmd=="rtpcap-start" || cmd=="callcap-start"){
                 const int id=requireCallId(in);std::string path=readArg(in),iface="any";
                 if(path.empty()) throw std::runtime_error("pcap file path required");
                 in>>std::ws;if(!in.eof()) iface=readArg(in);
-                if(cmd=="sipcap-start")engine.startSipPcap(id,path,iface);else if(cmd=="rtpcap-start")engine.startRtpPcap(id,path,iface);else engine.startCallPcap(id,path,iface);
+                if(cmd=="rtpcap-start")engine.startRtpPcap(id,path,iface);else engine.startCallPcap(id,path,iface);
                 focusCallId=id;
-                const std::string kind=cmd=="sipcap-start"?"SIP":(cmd=="rtpcap-start"?"RTP":"CALL");addNotice(kind+" PCAP started: "+path,DashboardNotice::Level::Success);
+                const std::string kind=cmd=="rtpcap-start"?"RTP":"CALL";addNotice(kind+" PCAP started: "+path,DashboardNotice::Level::Success);
             }else if(cmd=="capture-stop"){
                 std::string which="all";in>>which;
                 if(which=="sip") engine.stopCapture(CaptureKind::Sip);
@@ -988,6 +1067,8 @@ int main(int argc,char** argv)
                 for(const auto& name:CaptureManager::availableInterfaces())list<<" "<<name;
                 list<<"\n"<<CaptureManager::permissionHint()<<"\n";
                 dashboard.showOverlay("CAPTURE INTERFACES",list.str(),std::cout);dashboard.pauseForEnter(std::cin,std::cout);
+            }else if(cmd=="sipcap-open"){
+                std::string path=readArg(in);if(path.empty())throw std::runtime_error("pcap file path required");engine.openSipPcapInWireshark(path);addNotice("Opened SIP PCAP in Wireshark with forced SIP Decode As: "+path,DashboardNotice::Level::Success);
             }else if(cmd=="pcap-open"){
                 const int id=requireCallId(in);std::string path=readArg(in);if(path.empty())throw std::runtime_error("pcap file path required");focusCallId=id;engine.openPcapInWireshark(id,path);addNotice("Opened PCAP in Wireshark with automatic RTP/RTCP decoding: "+path,DashboardNotice::Level::Success);
             }else if(cmd=="capture-status"){

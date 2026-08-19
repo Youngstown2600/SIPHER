@@ -1,3 +1,31 @@
+# r12 Linux + FreeBSD live audio hot-swap update — 2026-08-19
+
+S.I.P.H.E.R. r12 makes the r11 close/refresh/reopen/reattach audio lifecycle automatic on both supported Unix families. Linux follows PipeWire/PulseAudio route changes. FreeBSD uses PulseAudio route state when available and otherwise monitors native OSS/snd_hda default PCM, PCM inventory, and recording-source state. The SIP dialog and RTP session remain up while the local PJSIP hardware bridge is reopened and the foreground call is reattached.
+
+The new `audio-auto on|off` command and GUI **Automatically Follow Headset / System Audio** option control this behavior; it is enabled by default.
+
+FreeBSD note: when speakers and the headphone jack are pins in the same snd_hda output association, the kernel normally performs speaker automute itself. r12 does not retask HDA pins at runtime merely to implement hot-plug; it reacts to safe userland-visible routing/device changes and preserves the existing verified Project-2501 audio repair logic in the builder.
+
+# r11 audio hot-plug/reopen update — 2026-08-19
+
+S.I.P.H.E.R. r11 replaces the previous ID-only audio switch with a true PJSIP sound-device lifecycle. On an active call it detaches the call bridge, closes the sound device, refreshes device enumeration, restores the chosen capture/playback devices by stable driver/name, immediately opens them, verifies the sound device is active, then reattaches the call. Linux desktop builds prefer `ALSA / pipewire` and can automatically reopen when PipeWire changes the active speaker/headset or microphone port. Manual `audio-reopen` and GUI **Reopen / Refresh Audio** are available as recovery controls.
+
+# S.I.P.H.E.R. 1.0.0 r10 — Dial prefix + explicit SIP TX/RX — 2026-08-18
+
+This revision adds PBX dial-prefix handling and makes outbound SIP signaling unmistakable throughout the diagnostics UI.
+
+### Dial prefix
+
+Set **Dial prefix** in the SIP profile (for example `4071`). When you dial a plain number such as `3306651498`, S.I.P.H.E.R. builds the destination as `40713306651498` before creating the SIP Request-URI sent to Asterisk/FreePBX. Explicit SIP URIs and `user@domain` destinations bypass the prefix automatically.
+
+The GUI Main page includes a **Use configured dial prefix** checkbox so the saved prefix can be disabled for an individual call. The CLI applies the saved profile prefix to normal `dial` commands and shows the final effective SIP URI in its call-start notice.
+
+### SIP sent/received visibility
+
+The SIP Log, CLI SIP page, raw SIP views, saved traces, and SIP ladder now use explicit **SENT →** / **← RECEIVED** wording. This makes the outbound INVITE, ACK, BYE, authenticated retry, re-INVITE, and other transmitted signaling visibly distinguishable from responses coming back from the PBX.
+
+Builder revision: `sipher-r10-20260818-dial-prefix-sip-tx`.
+
 # S.I.P.H.E.R. 1.0.0 r9 — Unix/Linux audio output selector — 2026-08-18
 
 - New GUI `Settings -> Audio Output...` control on Unix/Linux.

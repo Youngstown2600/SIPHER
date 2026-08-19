@@ -16,6 +16,9 @@ struct SipProfile {
     std::string displayName{"S.I.P.H.E.R."};
     std::string outboundProxy;
     std::string callerIdDomain;
+    // Optional PBX access/dial prefix. Applied only to plain dial strings,
+    // never to explicit sip:/sips: URIs or user@domain destinations.
+    std::string dialPrefix;
     std::string stunServer;
     Transport transport{Transport::Udp};
     IdentityMode identityMode{IdentityMode::From};

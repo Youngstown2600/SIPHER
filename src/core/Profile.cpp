@@ -126,6 +126,7 @@ SipProfile ProfileStore::loadDraft(const std::string& path)
     p.displayName = get("display_name", p.displayName);
     p.outboundProxy = ensureSipUri(get("outbound_proxy"));
     p.callerIdDomain = get("caller_id_domain");
+    p.dialPrefix = trim(get("dial_prefix"));
     p.stunServer = get("stun_server");
     p.transport = transportFromString(get("transport", "udp"));
     p.identityMode = identityModeFromString(get("identity_mode", "from"));
@@ -144,6 +145,8 @@ void ProfileStore::validate(const SipProfile& p)
     if (trim(p.username).empty()) throw std::runtime_error("profile missing username");
     if (p.localSipPort == 0) throw std::runtime_error("local_sip_port must be 1-65535");
     if (p.registrationExpires == 0) throw std::runtime_error("registration_expires must be greater than zero");
+    if (p.dialPrefix.find_first_of(" \t\r\n@<>:") != std::string::npos)
+        throw std::runtime_error("dial_prefix must be a plain dial-string prefix (for example 9 or 4071)");
 }
 
 bool ProfileStore::isConfigured(const SipProfile& p) noexcept
@@ -206,6 +209,7 @@ void ProfileStore::save(const SipProfile& p, const std::string& path)
             << "display_name=" << p.displayName << "\n"
             << "outbound_proxy=" << p.outboundProxy << "\n"
             << "caller_id_domain=" << p.callerIdDomain << "\n"
+            << "dial_prefix=" << p.dialPrefix << "\n"
             << "stun_server=" << p.stunServer << "\n"
             << "transport=" << toString(p.transport) << "\n"
             << "identity_mode=" << toString(p.identityMode) << "\n"

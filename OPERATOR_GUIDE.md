@@ -1,5 +1,11 @@
 # S.I.P.H.E.R. Operator Guide
 
+
+## PBX dial prefix
+
+If Asterisk/FreePBX requires access/routing digits before the called number, set `dial_prefix` in the SIP profile (GUI: **Settings → SIP Profile**; CLI: `profile-edit`). Example: with `dial_prefix=4071`, dialing `3306651498` sends the call to `sip:40713306651498@<PBX>`; PJSIP uses that prefixed destination for the outbound INVITE. Explicit `sip:`/`sips:` URIs and `user@domain` destinations are left unchanged.
+
+The GUI Main page has a **Use configured dial prefix** checkbox for one-call bypass. SIP diagnostics label outbound messages **SENT →** and inbound messages **← RECEIVED** so you can verify the exact signaling S.I.P.H.E.R. transmitted.
 S.I.P.H.E.R. 1.0 keeps the full TrunkMonkey 2.0 r20 engine but makes the terminal interface usable without memorizing commands.
 
 ## Start here
@@ -67,3 +73,29 @@ S.I.P.H.E.R. can switch the PJSIP playback device at runtime without changing th
 - **Startup override:** `SIPHER_PLAYBACK_DEVICE=<id> sipher` (or `sipher-gui`) still selects an output before registration.
 
 The existing `audio-use <capture-id> <playback-id>` command and GUI `Audio Devices...` dialog remain available when both microphone and playback routing need to be changed.
+
+## r11 Linux / Unix audio routing
+
+For Linux desktop systems using PipeWire, select `ALSA / pipewire` for both capture and playback when available. r11 normally selects it automatically unless `SIPHER_CAPTURE_DEVICE` / `SIPHER_PLAYBACK_DEVICE` (or legacy aliases) explicitly choose another device.
+
+Useful CLI commands:
+
+```text
+audio-status
+audio-devices
+audio-reopen
+audio-refresh
+audio-output <playback-id>
+audio-use <capture-id> <playback-id>
+```
+
+`audio-reopen` performs a real PJSIP close/reopen and reattaches the foreground call. In the dashboard CLI and GUI, Linux system-route changes detected through `pactl` automatically invoke the same recovery path when the selected devices follow PipeWire/default policy. If `pactl` is unavailable, automatic route watching is disabled but manual reopen remains available.
+
+
+## r12 automatic headset / audio-device switching
+
+Automatic switching is enabled by default on Linux and FreeBSD. Use `audio-auto off` to disable it for a session and `audio-auto on` to enable it again. `audio-status` reports the watcher backend and route.
+
+Linux uses PipeWire/PulseAudio (`pactl`) sink/source port state. FreeBSD prefers PulseAudio state when available; otherwise it monitors `hw.snd.default_unit`, `/dev/sndstat`, and the active `mixer -d <unit> -s` recording source. On a route change S.I.P.H.E.R. detaches the foreground call from the local sound bridge, closes PJSIP audio, refreshes devices, reopens audio, verifies the sound device, and reattaches the call without sending SIP BYE or redialing.
+
+On FreeBSD snd_hda systems where internal speakers and headphones are in the same output association, headphone speaker-auto-mute is performed by the kernel. S.I.P.H.E.R. intentionally does not rewrite pin associations during a call.

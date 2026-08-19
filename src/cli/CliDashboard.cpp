@@ -568,8 +568,8 @@ std::vector<std::string> CliDashboard::sipPageLines(const DashboardState& state,
     if(state.focusCallId<0) return {paint("Use Operator Menu option 4, or select a phone call with 'siplog <id>' / 'media <id>'.",DIM)};
     std::vector<std::string> lines;
     lines.push_back("Focused call: "+std::to_string(state.focusCallId)+"   "+state.captureStatus);
-    lines.push_back("IDX  TIME          DIR  CSEQ      SIGNAL / STATUS");
-    lines.push_back("---  ------------  ---  --------  ------------------------------------------------------------");
+    lines.push_back("IDX  TIME          FLOW          CSEQ      SIGNAL / STATUS");
+    lines.push_back("---  ------------  ------------  --------  ----------------------------------------------------");
     const std::size_t first=state.focusTrace.size()>static_cast<std::size_t>(maxRows)?state.focusTrace.size()-static_cast<std::size_t>(maxRows):0;
     for(std::size_t i=first;i<state.focusTrace.size();++i){
         const auto& e=state.focusTrace[i];
@@ -582,7 +582,7 @@ std::vector<std::string> CliDashboard::sipPageLines(const DashboardState& state,
         localtime_r(&t,&tm);
 #endif
         row<<std::setw(3)<<i<<"  "<<std::put_time(&tm,"%H:%M:%S")<<'.'<<std::setw(3)<<std::setfill('0')<<ms<<std::setfill(' ')<<"  "
-           <<(e.direction==SipDirection::Sent?"TX ":"RX ")<<"  "<<std::setw(8)<<e.cseq<<"  "<<e.label;
+           <<(e.direction==SipDirection::Sent?"SENT ->     ":"<- RECEIVED ")<<"  "<<std::setw(8)<<e.cseq<<"  "<<e.label;
         if(e.statusCode) row<<"  "<<e.statusCode<<" "<<e.reason;
         lines.push_back(paint(fit(row.str(),static_cast<std::size_t>(std::max(10,width-6))),e.direction==SipDirection::Sent?BRIGHT_YELLOW:BRIGHT_GREEN));
     }
@@ -628,7 +628,7 @@ std::vector<std::string> CliDashboard::profileLines(const DashboardState& state,
         labelValue("Registrar",fit(p.registrar,vw)),labelValue("Username",fit(p.username,vw)),
         labelValue("Auth username",fit(p.authUsername,vw)),labelValue("Password",p.password.empty()?"<empty>":"<saved>"),
         labelValue("Display name",fit(p.displayName,vw)),labelValue("Outbound proxy",fit(p.outboundProxy.empty()?"--":p.outboundProxy,vw)),
-        labelValue("Caller-ID domain",fit(p.callerIdDomain.empty()?"--":p.callerIdDomain,vw)),labelValue("Transport",upper(toString(p.transport))),
+        labelValue("Caller-ID domain",fit(p.callerIdDomain.empty()?"--":p.callerIdDomain,vw)),labelValue("Dial prefix",fit(p.dialPrefix.empty()?"--":p.dialPrefix,vw)),labelValue("Transport",upper(toString(p.transport))),
         labelValue("Local SIP port",std::to_string(p.localSipPort)),labelValue("Registration expires",std::to_string(p.registrationExpires)+" sec"),
         labelValue("Identity mode",toString(p.identityMode)),labelValue("STUN",fit(p.stunServer.empty()?"--":p.stunServer,vw)),
         labelValue("ICE",p.useIce?"enabled":"disabled"),labelValue("SRTP",p.enableSrtp?"enabled":"disabled"),
@@ -732,7 +732,7 @@ void CliDashboard::render(const DashboardState& state,std::ostream& out) const
         for(const auto& line:panelLines("SIP LOG — CALL "+(state.focusCallId>=0?std::to_string(state.focusCallId):std::string("--")),sipPageLines(state,size.columns,std::max(8,size.rows-12)),size.columns))out<<line<<'\n';
     }else if(state.page==DashboardPage::Media){
         for(const auto& line:panelLines("MEDIA / RTP DIAGNOSTICS",diagnosticLines(state,size.columns,0),size.columns))out<<line<<'\n';
-        for(const auto& line:panelLines("CAPTURE",{state.captureStatus,"capture-ifaces | sipcap-start <id> <file> [iface] | rtpcap-start <id> <file> [iface] | capture-stop all"},size.columns))out<<line<<'\n';
+        for(const auto& line:panelLines("CAPTURE",{state.captureStatus,"capture-ifaces | sipcap-start <file> [iface] (pre-dial) | rtpcap-start <id> <file> [iface] | capture-stop all"},size.columns))out<<line<<'\n';
     }else if(state.page==DashboardPage::Calls){
         for(const auto& line:panelLines("ACTIVE CALLS",callLines(state,size.columns,size.columns<90,std::max(2,size.rows-12)),size.columns))out<<line<<'\n';
         for(const auto& line:panelLines("CALL CONTROL",{"Operator Mode: select 2 from Main for guided call control.","Advanced: foreground <id> | answer <id> | hold <id> | resume <id> | dtmf <id> <digits> | hangup <id>"},size.columns))out<<line<<'\n';

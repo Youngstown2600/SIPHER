@@ -33,7 +33,9 @@ public:
     // Wireshark's command line so the operator does not have to set it by hand.
     static std::string wiresharkTool();
     static std::vector<std::string> wiresharkDecodeArguments(const std::string& path,const CallSnapshot& call);
+    static std::vector<std::string> wiresharkSipDecodeArguments(const std::string& path,unsigned localSipPort);
     static void openInWireshark(const std::string& path,const CallSnapshot& call);
+    static void openSipInWireshark(const std::string& path,unsigned localSipPort);
 private:
     struct Proc {
 #ifdef _WIN32

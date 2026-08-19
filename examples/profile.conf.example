@@ -10,6 +10,8 @@ password=
 display_name=S.I.P.H.E.R.
 outbound_proxy=
 caller_id_domain=
+# Optional PBX access prefix prepended to plain dial strings only. Example: 4071
+dial_prefix=
 
 # udp | tcp | tls
 transport=udp

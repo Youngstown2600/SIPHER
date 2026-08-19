@@ -4,6 +4,7 @@
 #include "trunkmonkey/SipTrace.h"
 #include <pjsua2.hpp>
 #include <atomic>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -13,6 +14,17 @@ namespace trunkmonkey {
 class CallSession; class CaptureManager; class Logger; class SipAccount; class SipWireMonitor;
 enum class CaptureKind;
 struct AudioDeviceInfo { int id{-1}; std::string driver; std::string name; unsigned inputCount{0}; unsigned outputCount{0}; };
+struct AudioStatusInfo {
+    int captureId{-1};
+    int playbackId{-1};
+    bool soundActive{false};
+    bool hotplugWatchAvailable{false};
+    bool autoSwitchEnabled{true};
+    std::string hotplugBackend;
+    std::string captureDevice;
+    std::string playbackDevice;
+    std::string systemRoute;
+};
 class SipEngine {
 public:
     explicit SipEngine(Logger& logger); ~SipEngine();
@@ -21,7 +33,7 @@ public:
     void stop();
     bool started()const; bool registered()const; std::string registrationText()const;
     const SipProfile& profile()const;
-    int makeCall(const std::string& destination,const std::string& callerId={},bool makeForeground=true,CallPurpose purpose=CallPurpose::Phone);
+    int makeCall(const std::string& destination,const std::string& callerId={},bool makeForeground=true,CallPurpose purpose=CallPurpose::Phone,bool applyDialPrefix=true);
     void answer(int id); void reject(int id,int code=603); void hangup(int id); void hangupAll();
     void hold(int id); void resume(int id); void sendDtmf(int id,const std::string& digits,unsigned durationMs=0);
     void setMicrophoneMuted(int id,bool muted);
@@ -29,6 +41,17 @@ public:
     int activeCaptureDevice()const; int activePlaybackDevice()const;
     void selectAudioDevices(int captureId,int playbackId);
     void selectPlaybackDevice(int playbackId);
+    void refreshAudioDevices();
+    void reopenAudioDevices();
+    AudioStatusInfo audioStatus()const;
+    // GUI/dashboard callers poll this periodically. Linux follows PipeWire/Pulse
+    // sink/source port changes. FreeBSD follows PulseAudio when available and
+    // otherwise watches native OSS/snd_hda default-unit, PCM and recsrc state.
+    // A route change performs a real PJSIP close/refresh/reopen and reattaches
+    // the foreground call without dropping the SIP dialog.
+    bool pollSystemAudioRoute();
+    void setAudioAutoSwitch(bool enabled);
+    bool audioAutoSwitchEnabled() const;
     void setCallAudioFile(int id,const std::string& path);
     void setForeground(int id); void clearForeground();
     std::vector<CallSnapshot> calls()const;
@@ -44,6 +67,10 @@ public:
     void stopSipTraceFile(int id);
     bool sipTraceRecording(int id)const;
     std::string sipTracePath(int id)const;
+    // SIP signaling capture does not require an active call. The no-ID overload
+    // can be armed before dialing so the initial prefixed INVITE and fast PBX
+    // responses (including 403 routing rejection or 401/407 challenge) are captured.
+    void startSipPcap(const std::string& path,const std::string& interfaceName="any");
     void startSipPcap(int id,const std::string& path,const std::string& interfaceName="any");
     void startRtpPcap(int id,const std::string& path,const std::string& interfaceName="any");
     void startCallPcap(int id,const std::string& path,const std::string& interfaceName="any");
@@ -51,8 +78,9 @@ public:
     void stopCaptures();
     std::string captureStatus()const;
     void openPcapInWireshark(int id,const std::string& path)const;
+    void openSipPcapInWireshark(const std::string& path)const;
 
-    std::string normalizeDestination(const std::string& value)const;
+    std::string normalizeDestination(const std::string& value,bool applyDialPrefix=true)const;
     std::string callerIdentityUri(const std::string& value)const;
     void onIncomingCall(int id);
     void onRegistrationState(bool active,int code,const std::string& reason);
@@ -76,6 +104,8 @@ private:
     mutable std::mutex mutex_;
     // Serializes call-wrapper creation against stop()/profile reload.
     mutable std::mutex callCreateMutex_;
+    mutable std::mutex audioMutex_;
+    mutable std::mutex audioRouteMutex_;
     SipProfile profile_;
     std::unique_ptr<pj::Endpoint> endpoint_;
     std::unique_ptr<SipAccount> account_;
@@ -86,6 +116,10 @@ private:
     std::map<std::string,int> callIdIndex_;
     std::map<std::string,std::vector<SipTraceEntry>> pendingSip_;
     int foregroundId_{-1};
+    std::string lastSystemAudioRoute_;
+    std::uint64_t lastSystemAudioPollMs_{0};
+    bool systemAudioWatchUnavailableLogged_{false};
+    std::atomic<bool> audioAutoSwitch_{true};
     std::atomic<bool> started_{false},registered_{false},stopping_{false};
     mutable std::mutex regMutex_;
     std::string registrationText_{"Stopped"};

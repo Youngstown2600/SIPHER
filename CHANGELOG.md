@@ -1,3 +1,36 @@
+## S.I.P.H.E.R. 1.0.0 r12 — Linux + FreeBSD live headset/device switching — 2026-08-19
+
+- Extends r11 automatic audio recovery to FreeBSD while retaining Linux PipeWire/PulseAudio support.
+- Linux watches the current PulseAudio/PipeWire sink/source and active ports and performs a live PJSIP detach -> close -> refresh -> reopen -> reattach when the route changes.
+- FreeBSD first uses PulseAudio route/port state when `pactl` is available. Otherwise it watches native OSS/snd_hda state: `hw.snd.default_unit`, `/dev/sndstat`, and `mixer -d <unit> -s` recording-source changes.
+- FreeBSD `snd_hda` same-association headphone switching remains kernel-managed; r12 reopens PJSIP when userland-visible route/PCM/record-source state changes, including USB PCM attach/detach and headset-mic autosrc changes.
+- Added `audio-auto on|off` and a GUI **Automatically Follow Headset / System Audio** toggle. Automatic switching defaults to ON.
+- Audio Status now reports watcher availability, backend, automatic-switch state and current system route.
+- Fixed refreshed-device disappearance handling: a removed device now falls back to PJSIP's capture/playback default instead of reusing a stale numeric index that may point at a different device.
+- Builder revision: `sipher-r12-20260819-linux-freebsd-audio-hotswap`.
+
+## S.I.P.H.E.R. 1.0.0 r11 — Linux/Unix audio reopen + headset hot-plug recovery — 2026-08-19
+
+- Reworked PJSIP audio switching: device changes now detach foreground media, call `setNoDev()`, refresh device enumeration, restore selections by driver/name, call `setSndDevMode(0)` for an immediate full-duplex reopen, verify `sndIsActive()`, and reattach the live call.
+- Fixes the r10 behavior where `audio-output` / `audio-use` only changed selected device IDs while an already-open PJSIP stream remained pinned to the old speaker/headset route.
+- Linux desktop startup now prefers the PJSIP-visible `ALSA / pipewire` device when available and no explicit environment override was supplied.
+- Linux GUI and dashboard CLI poll the PipeWire/Pulse compatibility route via `pactl`; speaker/headset or microphone port changes automatically trigger a PJSIP audio reopen when system/default audio is selected.
+- Added CLI `audio-status`, `audio-reopen`, and `audio-refresh`; `audio-devices` now reports whether the PJSIP sound device is actually active and shows the detected system route.
+- Added GUI **Audio Status...** and **Reopen / Refresh Audio** actions.
+- Direct ALSA/HDMI selections remain manual and are not overridden by desktop hot-plug policy.
+- Builder revision: `sipher-r11-20260819-audio-hotplug-reopen`.
+
+## S.I.P.H.E.R. 1.0.0 r10 — Dial prefix + explicit SIP TX/RX — 2026-08-18
+
+- Added `dial_prefix` to the SIP profile for Asterisk/FreePBX or other PBXs that require access/routing digits in the actual outbound SIP destination.
+- The prefix is applied only to plain dial strings. Explicit `sip:`, `sips:`, name-addr, and `user@domain` destinations are never rewritten.
+- GUI Main page now shows a per-call **Use configured dial prefix** switch; the saved prefix is edited under **Settings → SIP Profile**.
+- CLI profile editor/show pages now expose `dial_prefix`; normal `dial` commands automatically use the configured prefix.
+- Dial notices/status now show the effective SIP URI after prefix processing, making it easy to verify the exact Request-URI being attempted.
+- SIP Log direction labels are now explicit: **SENT →** and **← RECEIVED**, replacing terse TX/RX-only presentation.
+- Raw SIP selection, CLI raw SIP overlay, saved text traces, and the SIP ladder now explicitly identify traffic sent by S.I.P.H.E.R. versus traffic received from the PBX.
+- Builder revision: `sipher-r10-20260818-dial-prefix-sip-tx`.
+
 ## S.I.P.H.E.R. 1.0.0 r9 — Unix/Linux audio output selector — 2026-08-18
 
 - Added a dedicated Unix/Linux GUI **Settings -> Audio Output...** selector for playback-capable PJSIP devices.

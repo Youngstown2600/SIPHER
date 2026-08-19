@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <cstdio>
 #include <ctime>
 #include <sstream>
 #include <stdexcept>
@@ -52,6 +53,204 @@ std::string nameAddr(const std::string& value)
 {
     return value.find('<')!=std::string::npos ? value : "<"+value+">";
 }
+
+struct AudioDeviceKey {
+    std::string driver;
+    std::string name;
+    bool valid{false};
+};
+
+AudioDeviceKey deviceKey(const pj::AudioDevInfoVector2& devices,int id)
+{
+    if(id<0 || static_cast<std::size_t>(id)>=devices.size()) return {};
+    return {devices[static_cast<std::size_t>(id)].driver,devices[static_cast<std::size_t>(id)].name,true};
+}
+
+int resolveDeviceKey(const pj::AudioDevInfoVector2& devices,const AudioDeviceKey& key,bool capture)
+{
+    if(!key.valid) return capture ? PJMEDIA_AUD_DEFAULT_CAPTURE_DEV : PJMEDIA_AUD_DEFAULT_PLAYBACK_DEV;
+    for(std::size_t i=0;i<devices.size();++i){
+        const auto& d=devices[i];
+        if(d.driver==key.driver && d.name==key.name){
+            if(capture && d.inputCount<=0) break;
+            if(!capture && d.outputCount<=0) break;
+            return static_cast<int>(i);
+        }
+    }
+    // Device disappeared (common with USB headset removal). Do not reuse the
+    // old numeric index because refreshDevs() may have assigned that index to a
+    // completely different device. Fall back to PJSIP's system default.
+    return capture ? PJMEDIA_AUD_DEFAULT_CAPTURE_DEV : PJMEDIA_AUD_DEFAULT_PLAYBACK_DEV;
+}
+
+std::string audioDeviceLabel(const pj::AudioDevInfoVector2& devices,int id)
+{
+    if(id<0) return "PJSIP system default ("+std::to_string(id)+")";
+    if(static_cast<std::size_t>(id)>=devices.size()) return "device "+std::to_string(id)+" (index unavailable)";
+    const auto& d=devices[static_cast<std::size_t>(id)];
+    return "["+std::to_string(id)+"] "+d.driver+" / "+d.name;
+}
+
+#if defined(__linux__) || defined(__FreeBSD__)
+std::string runCommandText(const char* command)
+{
+    std::string result;
+    FILE* pipe=::popen(command,"r");
+    if(!pipe) return {};
+    char buffer[512];
+    while(std::fgets(buffer,sizeof(buffer),pipe)) result+=buffer;
+    const int rc=::pclose(pipe);
+    if(rc!=0) return {};
+    return trim(result);
+}
+
+std::string pulseDefaultFromInfo(const std::string& field)
+{
+    const auto text=runCommandText("pactl info 2>/dev/null");
+    if(text.empty()) return {};
+    std::istringstream in(text);
+    std::string line;
+    while(std::getline(in,line)){
+        const auto clean=trim(line);
+        if(clean.rfind(field,0)==0) return trim(clean.substr(field.size()));
+    }
+    return {};
+}
+
+std::string activePulsePort(const char* listCommand,const std::string& nodeName)
+{
+    if(nodeName.empty()) return {};
+    const auto text=runCommandText(listCommand);
+    if(text.empty()) return {};
+    std::istringstream in(text);
+    std::string line;
+    bool inTarget=false;
+    while(std::getline(in,line)){
+        const auto clean=trim(line);
+        if(clean.rfind("Name:",0)==0){
+            inTarget=trim(clean.substr(5))==nodeName;
+            continue;
+        }
+        if(inTarget && clean.rfind("Active Port:",0)==0) return trim(clean.substr(12));
+    }
+    return {};
+}
+
+struct SystemAudioRouteInfo {
+    std::string signature;
+    std::string display;
+    std::string backend;
+    bool available{false};
+};
+
+SystemAudioRouteInfo pulseSystemAudioRoute(const std::string& backend)
+{
+    // pactl speaks to PipeWire's PulseAudio compatibility layer on modern Linux
+    // desktops and to a native PulseAudio daemon where one is used on FreeBSD.
+    // Older PulseAudio versions may not implement get-default-{sink,source}, so
+    // fall back to parsing `pactl info`.
+    auto sink=runCommandText("pactl get-default-sink 2>/dev/null");
+    auto source=runCommandText("pactl get-default-source 2>/dev/null");
+    if(sink.empty()) sink=pulseDefaultFromInfo("Default Sink:");
+    if(source.empty()) source=pulseDefaultFromInfo("Default Source:");
+    if(sink.empty() && source.empty()) return {};
+    const auto sinkPort=activePulsePort("pactl list sinks 2>/dev/null",sink);
+    const auto sourcePort=activePulsePort("pactl list sources 2>/dev/null",source);
+    SystemAudioRouteInfo info;
+    info.available=true;
+    info.backend=backend;
+    info.signature="sink="+sink+";port="+sinkPort+";source="+source+";port="+sourcePort;
+    info.display=backend+": sink="+sink+";port="+(sinkPort.empty()?"<unknown>":sinkPort)+
+                 ";source="+source+";port="+(sourcePort.empty()?"<unknown>":sourcePort);
+    return info;
+}
+
+#ifdef __FreeBSD__
+std::string freebsdPcmLine(const std::string& sndstat,const std::string& unit)
+{
+    if(unit.empty()) return {};
+    const std::string prefix="pcm"+unit+":";
+    std::istringstream in(sndstat);
+    std::string line;
+    while(std::getline(in,line)){
+        const auto clean=trim(line);
+        if(clean.rfind(prefix,0)==0) return clean;
+    }
+    return {};
+}
+
+bool digitsOnly(const std::string& value)
+{
+    return !value.empty() && std::all_of(value.begin(),value.end(),[](unsigned char c){return std::isdigit(c)!=0;});
+}
+
+SystemAudioRouteInfo freebsdNativeAudioRoute()
+{
+    // FreeBSD does not have one universal desktop audio policy daemon. snd_hda
+    // normally performs speaker/headphone automute itself when a Headphones pin
+    // uses seq=15 in the same association. For application-level recovery we
+    // watch the pieces exposed to unprivileged userland: default PCM unit,
+    // installed PCM devices, and the active recording source. The latter changes
+    // when dev.pcm.N.rec.autosrc follows a newly inserted headset microphone.
+    const auto unit=runCommandText("sysctl -n hw.snd.default_unit 2>/dev/null");
+    const auto defaultAuto=runCommandText("sysctl -n hw.snd.default_auto 2>/dev/null");
+    const auto sndstat=runCommandText("cat /dev/sndstat 2>/dev/null");
+    if(unit.empty() && sndstat.empty()) return {};
+
+    std::string recsrc;
+    if(digitsOnly(unit)){
+        const std::string command="mixer -d "+unit+" -s 2>/dev/null";
+        recsrc=runCommandText(command.c_str());
+    }
+    const auto pcm=freebsdPcmLine(sndstat,unit);
+
+    // Keep all pcm description lines in the signature so USB/other PCM
+    // attach/detach is noticed, but keep the human-facing display compact.
+    std::ostringstream pcmSignature;
+    std::istringstream in(sndstat);
+    std::string line;
+    while(std::getline(in,line)){
+        const auto clean=trim(line);
+        if(clean.rfind("pcm",0)==0) pcmSignature<<clean<<'|';
+    }
+
+    SystemAudioRouteInfo info;
+    info.available=true;
+    info.backend="FreeBSD OSS/snd_hda";
+    info.signature="default="+unit+";default_auto="+defaultAuto+";recsrc="+recsrc+";pcms="+pcmSignature.str();
+    info.display=info.backend+": default="+(unit.empty()?"<unknown>":"pcm"+unit);
+    if(!defaultAuto.empty()) info.display+=";default_auto="+defaultAuto;
+    if(!recsrc.empty()) info.display+=";recsrc="+recsrc;
+    if(!pcm.empty()) info.display+=";device="+pcm;
+    return info;
+}
+#endif
+
+SystemAudioRouteInfo systemAudioRoute()
+{
+#ifdef __linux__
+    return pulseSystemAudioRoute("PipeWire/PulseAudio");
+#elif defined(__FreeBSD__)
+    // FreeBSD may run PulseAudio on top of OSS, but PJSIP/PortAudio can still be
+    // opening OSS directly. Combine both views so a PulseAudio port change OR a
+    // native default-unit/PCM/recsrc change can trigger recovery.
+    const auto pulse=pulseSystemAudioRoute("PulseAudio (FreeBSD)");
+    const auto native=freebsdNativeAudioRoute();
+    if(pulse.available && native.available){
+        SystemAudioRouteInfo info;
+        info.available=true;
+        info.backend="PulseAudio + FreeBSD OSS/snd_hda";
+        info.signature="pulse{"+pulse.signature+"};native{"+native.signature+"}";
+        info.display=pulse.display+" | "+native.display;
+        return info;
+    }
+    if(pulse.available) return pulse;
+    return native;
+#else
+    return {};
+#endif
+}
+#endif
 }
 
 SipEngine::SipEngine(Logger& logger):logger_(logger){}
@@ -181,11 +380,34 @@ void SipEngine::start(const SipProfile& p,unsigned maxCalls)
             }
 #endif
 
+#ifdef __linux__
+            // Prefer the ALSA "pipewire" PCM on Linux desktops when the user
+            // has not explicitly selected a device. This keeps S.I.P.H.E.R.
+            // inside PipeWire/WirePlumber policy instead of pinning a raw hw: PCM.
+            if(captureId<0 || playbackId<0){
+                for(std::size_t i=0;i<devices.size();++i){
+                    std::string driver=devices[i].driver,name=devices[i].name;
+                    std::transform(driver.begin(),driver.end(),driver.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
+                    std::transform(name.begin(),name.end(),name.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
+                    if(name=="pipewire" || (driver=="alsa" && name.find("pipewire")!=std::string::npos)){
+                        if(captureId<0 && devices[i].inputCount>0) captureId=static_cast<int>(i);
+                        if(playbackId<0 && devices[i].outputCount>0) playbackId=static_cast<int>(i);
+                    }
+                }
+            }
+#endif
             if(captureId>=0) audio.setCaptureDev(captureId);
             if(playbackId>=0) audio.setPlaybackDev(playbackId);
 
             logger_.info("Active PJSIP capture device ID: "+std::to_string(audio.getCaptureDev()));
             logger_.info("Active PJSIP playback device ID: "+std::to_string(audio.getPlaybackDev()));
+#if defined(__linux__) || defined(__FreeBSD__)
+            {
+                const auto route=systemAudioRoute();
+                lastSystemAudioRoute_=route.signature;
+                if(route.available) logger_.info("[AUDIO] System route baseline ("+route.backend+"): "+route.display);
+            }
+#endif
         } catch(const pj::Error& e){
             logger_.warn("Unable to enumerate/select PJSIP audio devices: "+e.info());
         }
@@ -299,6 +521,12 @@ void SipEngine::stop()
     }
     endpoint_.reset();
     captures_.reset();
+    {
+        std::lock_guard<std::mutex> routeLock(audioRouteMutex_);
+        lastSystemAudioRoute_.clear();
+        lastSystemAudioPollMs_=0;
+        systemAudioWatchUnavailableLogged_=false;
+    }
 
     {
         std::lock_guard<std::mutex> lock(regMutex_);
@@ -312,13 +540,16 @@ bool SipEngine::registered()const{return registered_;}
 std::string SipEngine::registrationText()const{std::lock_guard<std::mutex> lock(regMutex_);return registrationText_;}
 const SipProfile& SipEngine::profile()const{return profile_;}
 
-std::string SipEngine::normalizeDestination(const std::string& value)const
+std::string SipEngine::normalizeDestination(const std::string& value,bool applyDialPrefix)const
 {
     const auto v=trim(value);
     if(v.empty()) throw std::runtime_error("Destination is empty");
+    // An explicit SIP URI/user@domain is treated as an expert override and is
+    // never modified by the PBX dial-prefix feature.
     if(v.rfind("sip:",0)==0 || v.rfind("sips:",0)==0 || v.find('<')!=std::string::npos) return v;
     if(v.find('@')!=std::string::npos) return "sip:"+v;
-    return "sip:"+v+"@"+profile_.sipDomain;
+    const auto user=(applyDialPrefix && !profile_.dialPrefix.empty()) ? profile_.dialPrefix+v : v;
+    return "sip:"+user+"@"+profile_.sipDomain;
 }
 
 std::string SipEngine::callerIdentityUri(const std::string& value)const
@@ -352,7 +583,7 @@ void SipEngine::configureIdentity(pj::CallOpParam& param,const std::string& call
     }
 }
 
-int SipEngine::makeCall(const std::string& destination,const std::string& callerId,bool makeForeground,CallPurpose purpose)
+int SipEngine::makeCall(const std::string& destination,const std::string& callerId,bool makeForeground,CallPurpose purpose,bool applyDialPrefix)
 {
     std::lock_guard<std::mutex> creationLock(callCreateMutex_);
     if(!started_ || stopping_ || !account_) throw std::runtime_error("No active SIP account");
@@ -361,7 +592,7 @@ int SipEngine::makeCall(const std::string& destination,const std::string& caller
     call->setUpdateCallback([this](int id){ onCallUpdated(id); });
     pj::CallOpParam param(true);
     configureIdentity(param,callerId);
-    const auto uri=normalizeDestination(destination);
+    const auto uri=normalizeDestination(destination,applyDialPrefix);
     call->makeCall(uri,param);
 
     // A very fast failure can reach DISCONNECTED before makeCall() returns.
@@ -370,7 +601,7 @@ int SipEngine::makeCall(const std::string& destination,const std::string& caller
     const auto afterMake=call->snapshot();
     const int id=afterMake.id!=PJSUA_INVALID_ID ? afterMake.id : call->getId();
     const bool live=addCall(call);
-    logger_.info("Outgoing call "+std::to_string(id)+" -> "+uri+(callerId.empty()?"":" CID="+callerId));
+    logger_.info("Outgoing call "+std::to_string(id)+" -> "+uri+(callerId.empty()?"":" CID="+callerId)+(applyDialPrefix && !profile_.dialPrefix.empty()?" dial-prefix="+profile_.dialPrefix:""));
     if(makeForeground && live) setForeground(id);
     return id;
 }
@@ -511,6 +742,7 @@ void SipEngine::setMicrophoneMuted(int id,bool muted)
 std::vector<AudioDeviceInfo> SipEngine::audioDevices()const
 {
     if(!endpoint_)return {};
+    std::lock_guard<std::mutex> audioLock(audioMutex_);
     std::vector<AudioDeviceInfo> out;
     const auto devices=endpoint_->audDevManager().enumDev2();out.reserve(devices.size());
     for(std::size_t i=0;i<devices.size();++i){const auto&d=devices[i];out.push_back({static_cast<int>(i),d.driver,d.name,static_cast<unsigned>(d.inputCount),static_cast<unsigned>(d.outputCount)});}
@@ -520,50 +752,255 @@ std::vector<AudioDeviceInfo> SipEngine::audioDevices()const
 int SipEngine::activeCaptureDevice()const
 {
     if(!endpoint_) return -1;
+    std::lock_guard<std::mutex> audioLock(audioMutex_);
     return endpoint_->audDevManager().getCaptureDev();
 }
 
 int SipEngine::activePlaybackDevice()const
 {
     if(!endpoint_) return -1;
+    std::lock_guard<std::mutex> audioLock(audioMutex_);
     return endpoint_->audDevManager().getPlaybackDev();
+}
+
+AudioStatusInfo SipEngine::audioStatus()const
+{
+    AudioStatusInfo status;
+    if(!endpoint_) return status;
+    std::lock_guard<std::mutex> audioLock(audioMutex_);
+    auto& audio=endpoint_->audDevManager();
+    const auto devices=audio.enumDev2();
+    status.captureId=audio.getCaptureDev();
+    status.playbackId=audio.getPlaybackDev();
+    status.soundActive=audio.sndIsActive();
+    status.captureDevice=audioDeviceLabel(devices,status.captureId);
+    status.playbackDevice=audioDeviceLabel(devices,status.playbackId);
+#if defined(__linux__) || defined(__FreeBSD__)
+    const auto route=systemAudioRoute();
+    status.systemRoute=route.display;
+    status.hotplugWatchAvailable=route.available;
+    status.hotplugBackend=route.backend;
+#endif
+    status.autoSwitchEnabled=audioAutoSwitch_.load();
+    return status;
+}
+
+void SipEngine::reopenAudioDevices()
+{
+    if(!endpoint_)throw std::runtime_error("SIP engine is not started");
+
+    std::shared_ptr<CallSession> foreground;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it=calls_.find(foregroundId_);
+        if(it!=calls_.end() && !it->second->snapshot().disconnected) foreground=it->second;
+    }
+
+    // Detach while the old sound-device media objects are still valid.
+    if(foreground) foreground->detachAudio();
+
+    try{
+        std::lock_guard<std::mutex> audioLock(audioMutex_);
+        auto& audio=endpoint_->audDevManager();
+        const auto before=audio.enumDev2();
+        const int oldCapture=audio.getCaptureDev();
+        const int oldPlayback=audio.getPlaybackDev();
+        const auto captureKey=deviceKey(before,oldCapture);
+        const auto playbackKey=deviceKey(before,oldPlayback);
+
+        logger_.info("[AUDIO] Reopen requested: capture="+audioDeviceLabel(before,oldCapture)+
+                     " playback="+audioDeviceLabel(before,oldPlayback));
+
+        // setCaptureDev()/setPlaybackDev() alone do NOT reopen an already-open
+        // PJSIP device. Force the conference bridge off the hardware first.
+        audio.setNoDev();
+        logger_.info("[AUDIO] Existing PJSIP sound device closed");
+
+        // Refresh may change numeric indexes, so resolve the saved driver/name
+        // identities again before assigning IDs.
+        audio.refreshDevs();
+        const auto refreshed=audio.enumDev2();
+        const int capture=resolveDeviceKey(refreshed,captureKey,true);
+        const int playback=resolveDeviceKey(refreshed,playbackKey,false);
+
+        if(capture>=0){
+            if(static_cast<std::size_t>(capture)>=refreshed.size() || refreshed[static_cast<std::size_t>(capture)].inputCount<=0)
+                throw std::runtime_error("Selected capture device disappeared during audio refresh");
+        }
+        if(playback>=0){
+            if(static_cast<std::size_t>(playback)>=refreshed.size() || refreshed[static_cast<std::size_t>(playback)].outputCount<=0)
+                throw std::runtime_error("Selected playback device disappeared during audio refresh");
+        }
+
+        audio.setCaptureDev(capture);
+        audio.setPlaybackDev(playback);
+        // Mode 0 is normal full-duplex immediate-open: neither SPEAKER_ONLY nor
+        // NO_IMMEDIATE_OPEN is set. This is the step r10 was missing.
+        audio.setSndDevMode(0);
+        if(!audio.sndIsActive()) throw std::runtime_error("PJSIP did not report the reopened sound device as active");
+
+        logger_.info("[AUDIO] Reopened: capture="+audioDeviceLabel(refreshed,audio.getCaptureDev())+
+                     " playback="+audioDeviceLabel(refreshed,audio.getPlaybackDev())+" status=ACTIVE");
+    }catch(const pj::Error& e){
+        logger_.warn("[AUDIO] PJSIP reopen failed: "+e.info());
+        if(foreground){try{foreground->attachAudio();}catch(...){}}
+        throw;
+    }catch(const std::exception& e){
+        logger_.warn(std::string("[AUDIO] Reopen failed: ")+e.what());
+        if(foreground){try{foreground->attachAudio();}catch(...){}}
+        throw;
+    }
+
+    if(foreground){
+        foreground->attachAudio();
+        logger_.info("[AUDIO] Foreground call "+std::to_string(foreground->getId())+" reattached after sound-device reopen");
+    }
+#if defined(__linux__) || defined(__FreeBSD__)
+    {
+        const auto route=systemAudioRoute();
+        if(route.available){
+            std::lock_guard<std::mutex> routeLock(audioRouteMutex_);
+            lastSystemAudioRoute_=route.signature;
+        }
+    }
+#endif
+}
+
+void SipEngine::refreshAudioDevices()
+{
+    if(!endpoint_)throw std::runtime_error("SIP engine is not started");
+    // A refresh invalidates numeric indices. Reopen preserves selections by
+    // driver/name and is therefore the safe public refresh operation.
+    reopenAudioDevices();
 }
 
 void SipEngine::selectAudioDevices(int captureId,int playbackId)
 {
     if(!endpoint_)throw std::runtime_error("SIP engine is not started");
-    auto& audio=endpoint_->audDevManager();const auto devices=audio.enumDev2();
-    if(captureId<0||static_cast<std::size_t>(captureId)>=devices.size()||devices[static_cast<std::size_t>(captureId)].inputCount<=0)throw std::runtime_error("Invalid capture device ID");
-    if(playbackId<0||static_cast<std::size_t>(playbackId)>=devices.size()||devices[static_cast<std::size_t>(playbackId)].outputCount<=0)throw std::runtime_error("Invalid playback device ID");
-    audio.setCaptureDev(captureId);audio.setPlaybackDev(playbackId);
-    logger_.info("Audio devices selected: capture="+std::to_string(captureId)+" playback="+std::to_string(playbackId));
-    std::shared_ptr<CallSession> foreground;{std::lock_guard<std::mutex> lock(mutex_);auto it=calls_.find(foregroundId_);if(it!=calls_.end())foreground=it->second;}
-    if(foreground)foreground->attachAudio();
+    {
+        std::lock_guard<std::mutex> audioLock(audioMutex_);
+        auto& audio=endpoint_->audDevManager();const auto devices=audio.enumDev2();
+        if(captureId<0||static_cast<std::size_t>(captureId)>=devices.size()||devices[static_cast<std::size_t>(captureId)].inputCount<=0)throw std::runtime_error("Invalid capture device ID");
+        if(playbackId<0||static_cast<std::size_t>(playbackId)>=devices.size()||devices[static_cast<std::size_t>(playbackId)].outputCount<=0)throw std::runtime_error("Invalid playback device ID");
+        audio.setCaptureDev(captureId);audio.setPlaybackDev(playbackId);
+        logger_.info("[AUDIO] Devices selected; forcing reopen: capture="+std::to_string(captureId)+" playback="+std::to_string(playbackId));
+    }
+    reopenAudioDevices();
 }
 
 void SipEngine::selectPlaybackDevice(int playbackId)
 {
     if(!endpoint_)throw std::runtime_error("SIP engine is not started");
-    auto& audio=endpoint_->audDevManager();
-    const auto devices=audio.enumDev2();
-    if(playbackId<0 || static_cast<std::size_t>(playbackId)>=devices.size() ||
-       devices[static_cast<std::size_t>(playbackId)].outputCount<=0)
-        throw std::runtime_error("Invalid playback device ID");
-
-    audio.setPlaybackDev(playbackId);
-    logger_.info("Audio output selected: playback="+std::to_string(playbackId)+
-                 " driver=\""+devices[static_cast<std::size_t>(playbackId)].driver+
-                 "\" name=\""+devices[static_cast<std::size_t>(playbackId)].name+"\"");
-
-    // Rebind the foreground call so an in-progress call follows the newly
-    // selected speakers/headset immediately. Capture routing is untouched.
-    std::shared_ptr<CallSession> foreground;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it=calls_.find(foregroundId_);
-        if(it!=calls_.end()) foreground=it->second;
+        std::lock_guard<std::mutex> audioLock(audioMutex_);
+        auto& audio=endpoint_->audDevManager();
+        const auto devices=audio.enumDev2();
+        if(playbackId<0 || static_cast<std::size_t>(playbackId)>=devices.size() ||
+           devices[static_cast<std::size_t>(playbackId)].outputCount<=0)
+            throw std::runtime_error("Invalid playback device ID");
+        audio.setPlaybackDev(playbackId);
+        logger_.info("[AUDIO] Output selected; forcing reopen: playback="+std::to_string(playbackId)+
+                     " driver=\""+devices[static_cast<std::size_t>(playbackId)].driver+
+                     "\" name=\""+devices[static_cast<std::size_t>(playbackId)].name+"\"");
     }
-    if(foreground) foreground->attachAudio();
+    reopenAudioDevices();
+}
+
+bool SipEngine::pollSystemAudioRoute()
+{
+#if defined(__linux__) || defined(__FreeBSD__)
+    if(!endpoint_ || !started_ || !audioAutoSwitch_.load()) return false;
+    const auto now=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    {
+        std::lock_guard<std::mutex> routeLock(audioRouteMutex_);
+        if(lastSystemAudioPollMs_!=0 && now-lastSystemAudioPollMs_<750) return false;
+        lastSystemAudioPollMs_=now;
+    }
+
+    const auto current=systemAudioRoute();
+    if(!current.available){
+        std::lock_guard<std::mutex> routeLock(audioRouteMutex_);
+        if(!systemAudioWatchUnavailableLogged_){
+            systemAudioWatchUnavailableLogged_=true;
+            logger_.warn("[AUDIO] Automatic hot-plug watcher unavailable on this Unix host. Manual audio-reopen remains available.");
+        }
+        return false;
+    }
+
+    std::string previous;
+    {
+        std::lock_guard<std::mutex> routeLock(audioRouteMutex_);
+        systemAudioWatchUnavailableLogged_=false;
+        previous=lastSystemAudioRoute_;
+        if(previous.empty()){lastSystemAudioRoute_=current.signature;return false;}
+        if(previous==current.signature) return false;
+        lastSystemAudioRoute_=current.signature;
+    }
+
+#ifdef __linux__
+    // On Linux only auto-reopen when S.I.P.H.E.R. is following the desktop
+    // PipeWire/default ALSA path. Do not override a deliberately pinned hw:/HDMI
+    // device merely because the desktop's default port changed.
+    bool followsSystem=false;
+    {
+        std::lock_guard<std::mutex> audioLock(audioMutex_);
+        auto& audio=endpoint_->audDevManager();
+        const auto devices=audio.enumDev2();
+        const int cap=audio.getCaptureDev(),play=audio.getPlaybackDev();
+        auto systemish=[&](int id){
+            if(id<0 || static_cast<std::size_t>(id)>=devices.size()) return true;
+            std::string name=devices[static_cast<std::size_t>(id)].name;
+            std::transform(name.begin(),name.end(),name.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
+            return name=="pipewire" || name=="default" || name.find("pipewire")!=std::string::npos;
+        };
+        followsSystem=systemish(cap) && systemish(play);
+    }
+    if(!followsSystem){
+        logger_.info("[AUDIO] Linux system route changed but direct/manual audio devices are selected; no automatic reopen");
+        return false;
+    }
+#endif
+
+    logger_.info("[AUDIO] Automatic route change detected ("+current.backend+"): "+current.display);
+    try{
+        reopenAudioDevices();
+    }catch(...){
+        // Keep retrying on the next poll if a jack/device transition temporarily
+        // made the audio device unavailable during insertion/removal.
+        std::lock_guard<std::mutex> routeLock(audioRouteMutex_);
+        lastSystemAudioRoute_=previous;
+        throw;
+    }
+    return true;
+#else
+    return false;
+#endif
+}
+
+void SipEngine::setAudioAutoSwitch(bool enabled)
+{
+    audioAutoSwitch_.store(enabled);
+#if defined(__linux__) || defined(__FreeBSD__)
+    if(enabled){
+        const auto route=systemAudioRoute();
+        std::lock_guard<std::mutex> routeLock(audioRouteMutex_);
+        lastSystemAudioRoute_=route.signature;
+        lastSystemAudioPollMs_=0;
+        systemAudioWatchUnavailableLogged_=false;
+        logger_.info(std::string("[AUDIO] Automatic headset/device switching enabled")+
+                     (route.available?" via "+route.backend:" (route watcher currently unavailable)"));
+    }else{
+        logger_.info("[AUDIO] Automatic headset/device switching disabled");
+    }
+#else
+    (void)enabled;
+#endif
+}
+
+bool SipEngine::audioAutoSwitchEnabled() const
+{
+    return audioAutoSwitch_.load();
 }
 
 void SipEngine::setCallAudioFile(int id,const std::string& path)
@@ -695,8 +1132,8 @@ std::string SipEngine::sipLadder(int id)const
     for(const auto&e:trace){
         std::ostringstream label;label<<e.label;if(e.statusCode)label<<" ["<<e.statusCode<<"]";
         auto text=label.str();if(text.size()>34)text=text.substr(0,31)+"...";
-        if(e.direction==SipDirection::Sent)out<<"  |---- "<<std::left<<std::setw(34)<<text<<" -->|\n";
-        else out<<"  |<--- "<<std::left<<std::setw(34)<<text<<" ---|\n";
+        if(e.direction==SipDirection::Sent)out<<"  |---- "<<std::left<<std::setw(27)<<text<<" [SENT] -->|\n";
+        else out<<"  |<--- "<<std::left<<std::setw(27)<<text<<" [RECEIVED] ---|\n";
     }
     out<<"  |                                           |\n";return out.str();
 }
@@ -759,7 +1196,18 @@ std::string SipEngine::sipTracePath(int id)const
     if(!archived) throw std::runtime_error("Call not found");
     return archived->sipTracePath;
 }
-void SipEngine::startSipPcap(int id,const std::string& path,const std::string& iface){requirePhoneCall(id);if(!captures_)throw std::runtime_error("Capture manager is not available");captures_->startSip(path,profile_.localSipPort,iface);}
+void SipEngine::startSipPcap(const std::string& path,const std::string& iface)
+{
+    if(!started_) throw std::runtime_error("SIP engine is not running");
+    if(!captures_) throw std::runtime_error("Capture manager is not available");
+    captures_->startSip(path,profile_.localSipPort,iface);
+    logger_.info("Pre-dial SIP PCAP armed on local SIP port "+std::to_string(profile_.localSipPort)+": "+path);
+}
+void SipEngine::startSipPcap(int id,const std::string& path,const std::string& iface)
+{
+    requirePhoneCall(id);
+    startSipPcap(path,iface);
+}
 void SipEngine::startRtpPcap(int id,const std::string& path,const std::string& iface)
 {
     auto call=requirePhoneCall(id);
@@ -783,6 +1231,11 @@ void SipEngine::openPcapInWireshark(int id,const std::string& path)const
     const auto state=callSnapshot(id);
     CaptureManager::openInWireshark(path,state);
     logger_.info("Opened PCAP in Wireshark with automatic RTP/RTCP Decode As: "+path);
+}
+void SipEngine::openSipPcapInWireshark(const std::string& path)const
+{
+    CaptureManager::openSipInWireshark(path,profile_.localSipPort);
+    logger_.info("Opened SIP PCAP in Wireshark with forced SIP Decode As on local port "+std::to_string(profile_.localSipPort)+": "+path);
 }
 
 void SipEngine::onSipMessage(SipTraceEntry entry)

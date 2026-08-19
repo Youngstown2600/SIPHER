@@ -52,6 +52,7 @@ int main()
         profile.username = "1001";
         profile.authUsername = "auth1001";
         profile.password = "secret";
+        profile.dialPrefix = "4071";
         profile.transport = Transport::Tcp;
         profile.identityMode = IdentityMode::FromAndPai;
         ProfileStore::save(profile, profilePath.string());
@@ -86,6 +87,7 @@ int main()
         check(loaded.name == profile.name, "profile name round-trips");
         check(loaded.sipDomain == profile.sipDomain, "SIP domain round-trips");
         check(loaded.authUsername == profile.authUsername, "auth username round-trips");
+        check(loaded.dialPrefix == "4071", "dial prefix round-trips");
         check(loaded.transport == Transport::Tcp, "transport round-trips");
         check(loaded.identityMode == IdentityMode::FromAndPai, "identity mode round-trips");
 
@@ -105,6 +107,13 @@ int main()
         try { (void)ProfileStore::load(invalidPath.string()); }
         catch (const std::runtime_error&) { rejected = true; }
         check(rejected, "out-of-range SIP port is rejected");
+
+        SipProfile invalidPrefix = profile;
+        invalidPrefix.dialPrefix = "4071@bad";
+        rejected = false;
+        try { ProfileStore::validate(invalidPrefix); }
+        catch (const std::runtime_error&) { rejected = true; }
+        check(rejected, "invalid dial prefix is rejected");
 
         {
             std::ofstream out(poolPath);

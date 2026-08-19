@@ -85,10 +85,34 @@ std::vector<std::string> CaptureManager::wiresharkDecodeArguments(const std::str
     if(rtp.empty()&&rtcp.empty()){args.push_back("--enable-heuristic");args.push_back("rtp_udp");}
     return args;
 }
+std::vector<std::string> CaptureManager::wiresharkSipDecodeArguments(const std::string&path,unsigned localSipPort){
+    if(path.empty())throw std::runtime_error("PCAP path is empty");
+    if(localSipPort==0||localSipPort>65535)throw std::runtime_error("Invalid local SIP port");
+    // Force Wireshark's SIP dissector on the PJSIP transport port. This is
+    // useful when the PBX uses a non-standard peer port or Wireshark did not
+    // identify the flow heuristically. TLS remains encrypted on the wire and
+    // therefore cannot be decoded as clear-text SIP without TLS secrets.
+    const auto port=std::to_string(localSipPort);
+    return {"-r",path,"-d","udp.port=="+port+",sip","-d","tcp.port=="+port+",sip"};
+}
 void CaptureManager::openInWireshark(const std::string&path,const CallSnapshot&c){
     std::error_code ec;if(!std::filesystem::exists(std::filesystem::u8path(path),ec))throw std::runtime_error("PCAP file was not found: "+path);
     const auto tool=wiresharkTool();if(tool.empty())throw std::runtime_error("Wireshark was not found. Install Wireshark or add it to PATH, then try again.");
     const auto args=wiresharkDecodeArguments(path,c);
+#ifdef _WIN32
+    std::ostringstream command;command<<quoteWin(tool);for(const auto&a:args)command<<" "<<quoteWin(a);if(!startDesktopProcess(command.str()))throw std::runtime_error("Unable to launch Wireshark.exe");
+#else
+    std::vector<char*>argv;argv.reserve(args.size()+2);argv.push_back(const_cast<char*>(tool.c_str()));for(const auto&a:args)argv.push_back(const_cast<char*>(a.c_str()));argv.push_back(nullptr);
+    posix_spawn_file_actions_t actions;if(posix_spawn_file_actions_init(&actions)!=0)throw std::runtime_error("Unable to initialize Wireshark process actions");
+    (void)posix_spawn_file_actions_addopen(&actions,STDOUT_FILENO,"/dev/null",O_WRONLY,0600);(void)posix_spawn_file_actions_addopen(&actions,STDERR_FILENO,"/dev/null",O_WRONLY,0600);
+    pid_t pid=-1;const int rc=::posix_spawn(&pid,tool.c_str(),&actions,nullptr,argv.data(),environ);posix_spawn_file_actions_destroy(&actions);if(rc!=0)throw std::runtime_error("Unable to launch Wireshark: "+std::string(std::strerror(rc)));
+    std::thread([pid](){int st=0;while(::waitpid(pid,&st,0)<0&&errno==EINTR){}}).detach();
+#endif
+}
+void CaptureManager::openSipInWireshark(const std::string&path,unsigned localSipPort){
+    std::error_code ec;if(!std::filesystem::exists(std::filesystem::u8path(path),ec))throw std::runtime_error("PCAP file was not found: "+path);
+    const auto tool=wiresharkTool();if(tool.empty())throw std::runtime_error("Wireshark was not found. Install Wireshark or add it to PATH, then try again.");
+    const auto args=wiresharkSipDecodeArguments(path,localSipPort);
 #ifdef _WIN32
     std::ostringstream command;command<<quoteWin(tool);for(const auto&a:args)command<<" "<<quoteWin(a);if(!startDesktopProcess(command.str()))throw std::runtime_error("Unable to launch Wireshark.exe");
 #else

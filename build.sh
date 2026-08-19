@@ -2,7 +2,7 @@
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-BUILDER_REVISION="sipher-r9-20260818-unix-audio-output"
+BUILDER_REVISION="sipher-r12-20260819-linux-freebsd-audio-hotswap"
 
 # A shell can keep an old logical $PWD after a desktop file manager moves the
 # directory to Trash. Building from that relocated inode is especially unsafe
@@ -420,6 +420,7 @@ map_missing_to_packages() {
     apt:git) add_package_group git ;;
     apt:make) add_package_group build-essential ;;
     apt:alsa) add_package_group libasound2-dev ;;
+    apt:pactl) add_package_group pulseaudio-utils ;;
     apt:openssl) add_package_group libssl-dev ;;
     apt:uuid) add_package_group uuid-dev ;;
     apt:qt6) add_package_group qt6-base-dev qt6-qpa-plugins ;;
@@ -436,6 +437,7 @@ map_missing_to_packages() {
     dnf:git) add_package_group git ;;
     dnf:make) add_package_group make ;;
     dnf:alsa) add_package_group alsa-lib-devel ;;
+    dnf:pactl) add_package_group pulseaudio-utils ;;
     dnf:openssl) add_package_group openssl-devel ;;
     dnf:uuid) add_package_group libuuid-devel ;;
     dnf:qt6) add_package_group qt6-qtbase-devel ;;
@@ -533,7 +535,18 @@ run_audio_preflight() {
     fi
 
     default_unit=$(sysctl -n hw.snd.default_unit 2>/dev/null || true)
+    default_auto=$(sysctl -n hw.snd.default_auto 2>/dev/null || true)
     [ -n "$default_unit" ] && audio_info "FreeBSD default PCM unit: pcm$default_unit"
+    [ -n "$default_auto" ] && audio_info "FreeBSD automatic default-device policy (hw.snd.default_auto): $default_auto"
+    if command -v mixer >/dev/null 2>&1 && [ -n "$default_unit" ]; then
+      recsrc=$(mixer -d "$default_unit" -s 2>/dev/null || true)
+      [ -n "$recsrc" ] && audio_info "FreeBSD active recording source(s): $recsrc"
+    fi
+    if command -v pactl >/dev/null 2>&1 && pactl info >/dev/null 2>&1; then
+      audio_info "PulseAudio compatibility detected on FreeBSD; r12 will use it as the preferred live route-change watcher."
+    else
+      audio_info "r12 will use native FreeBSD OSS/snd_hda state for automatic audio recovery."
+    fi
 
     if [ -n "${sndstat_out:-}" ]; then
       rec_only=$(printf '%s\n' "$sndstat_out" | grep '^pcm[0-9][0-9]*:' | grep -E '\(rec\)' || true)
@@ -782,6 +795,7 @@ detect_missing_dependencies() {
     if [ -z "$PKGCONF_BIN" ] || ! "$PKGCONF_BIN" --exists alsa 2>/dev/null; then
       mark_missing alsa "ALSA development files"
     fi
+    command -v pactl >/dev/null 2>&1 || mark_missing pactl "pactl / PulseAudio compatibility utilities (Linux PipeWire hot-plug watcher)"
     if [ -z "$PKGCONF_BIN" ] || ! "$PKGCONF_BIN" --exists openssl 2>/dev/null; then
       mark_missing openssl "OpenSSL development files"
     fi
@@ -1209,7 +1223,7 @@ TM_PJSIP_LINK_EOF
     case " $pjlibs " in
       *" -lstdc++ "*)
         echo "PJSIP FreeBSD ABI mismatch: libpjproject requests libstdc++, but S.I.P.H.E.R./Qt use base Clang/libc++." >&2
-        echo "The local PJSIP must be rebuilt by this r11 builder." >&2
+        echo "The local PJSIP must be rebuilt by this r12 builder." >&2
         rm -rf "$tmplink"; trap - 0 HUP INT TERM; return 1 ;;
     esac
   fi
